@@ -49,6 +49,7 @@ DEFAULT_SHARED_PREFIXES=(
   "lottery-web-prod"
   "player-history-prod"
   "tournaments-prod"
+  "tournaments-prod-bgsp"
   "replays-ong-prod-ext"
 )
 
@@ -368,9 +369,9 @@ ensure_prefix_files() {
     fi
     chmod 644 "${PREFIXES_SHARED_FILE}"
     log "Wrote ${PREFIXES_SHARED_FILE}"
-  elif grep -q -- '-bgsp' "${PREFIXES_SHARED_FILE}" 2>/dev/null; then
-    sed -i 's/-bgsp//g' "${PREFIXES_SHARED_FILE}"
-    log "Removed -bgsp suffix from ${PREFIXES_SHARED_FILE}"
+  elif ! grep -qx 'tournaments-prod-bgsp' "${PREFIXES_SHARED_FILE}" 2>/dev/null; then
+    printf '\ntournaments-prod-bgsp\n' >>"${PREFIXES_SHARED_FILE}"
+    log "Added tournaments-prod-bgsp to ${PREFIXES_SHARED_FILE}"
   fi
 }
 

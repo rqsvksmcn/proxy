@@ -402,11 +402,16 @@ install_url_prefixes() {
     log "Wrote ${client_dest}"
   fi
 
-  if [[ -f "${shared_dest}" ]] && grep -q -- '-bgsp' "${shared_dest}"; then
-    sed -i 's/-bgsp//g' "${shared_dest}"
-    log "Removed -bgsp suffix from ${shared_dest}"
-  elif [[ -f "${shared_dest}" ]] && grep -q 'lottery-api-instant\|tournaments-prod' "${shared_dest}"; then
+  if [[ -f "${shared_dest}" ]] && grep -qx 'tournaments-prod-bgsp' "${shared_dest}" \
+    && grep -q 'lottery-api-instant\|tournaments-prod' "${shared_dest}"; then
     log "Keeping existing ${shared_dest}"
+  elif [[ -f "${shared_dest}" ]]; then
+    if ! grep -qx 'tournaments-prod-bgsp' "${shared_dest}"; then
+      printf '\ntournaments-prod-bgsp\n' >>"${shared_dest}"
+      log "Added tournaments-prod-bgsp to ${shared_dest}"
+    else
+      log "Keeping existing ${shared_dest}"
+    fi
   else
     cp "${PROXIES_ROOT}/config/prefixes-shared.env.example" "${shared_dest}"
     chmod 644 "${shared_dest}"
