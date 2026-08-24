@@ -143,6 +143,7 @@ lottery-api-instant.NEWdomain.com
 lottery-api-instant-prod.NEWdomain.com
 lottery-web-prod.NEWdomain.com
 player-history-prod.NEWdomain.com
+player-history-prod-bgsp.NEWdomain.com
 tournaments-prod.NEWdomain.com
 tournaments-prod-bgsp.NEWdomain.com
 replays-ong-prod-ext.NEWdomain.com

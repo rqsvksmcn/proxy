@@ -48,6 +48,7 @@ DEFAULT_SHARED_PREFIXES=(
   "lottery-api-instant-prod"
   "lottery-web-prod"
   "player-history-prod"
+  "player-history-prod-bgsp"
   "tournaments-prod"
   "tournaments-prod-bgsp"
   "replays-ong-prod-ext"
@@ -347,6 +348,17 @@ client_only_origin_prefixes() {
   done < <(_read_prefix_lines "${PREFIXES_CLIENT_FILE}" "${DEFAULT_CLIENT_PREFIXES[@]}")
 }
 
+# Append a shared prefix line if missing (idempotent migration for existing VMs).
+_ensure_shared_prefix_line() {
+  local file="$1"
+  local line="$2"
+  [[ -f "${file}" ]] || return 0
+  if ! grep -qx "${line}" "${file}" 2>/dev/null; then
+    printf '%s\n' "${line}" >>"${file}"
+    log "Added ${line} to ${file}"
+  fi
+}
+
 ensure_prefix_files() {
   mkdir -p "${PROXIES_ETC}"
   if [[ ! -f "${PREFIXES_CLIENT_FILE}" ]]; then
@@ -369,9 +381,9 @@ ensure_prefix_files() {
     fi
     chmod 644 "${PREFIXES_SHARED_FILE}"
     log "Wrote ${PREFIXES_SHARED_FILE}"
-  elif ! grep -qx 'tournaments-prod-bgsp' "${PREFIXES_SHARED_FILE}" 2>/dev/null; then
-    printf '\ntournaments-prod-bgsp\n' >>"${PREFIXES_SHARED_FILE}"
-    log "Added tournaments-prod-bgsp to ${PREFIXES_SHARED_FILE}"
+  else
+    _ensure_shared_prefix_line "${PREFIXES_SHARED_FILE}" "player-history-prod-bgsp"
+    _ensure_shared_prefix_line "${PREFIXES_SHARED_FILE}" "tournaments-prod-bgsp"
   fi
 }
 
