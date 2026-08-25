@@ -391,10 +391,25 @@ install_url_prefixes() {
   local client_dest="${PROXIES_ETC}/prefixes-client.env"
   local shared_dest="${PROXIES_ETC}/prefixes-shared.env"
 
-  if [[ -f "${client_dest}" ]] && grep -q -- '-bgsp' "${client_dest}"; then
-    sed -i 's/-bgsp//g' "${client_dest}"
-    log "Removed -bgsp suffix from ${client_dest}"
-  elif [[ -f "${client_dest}" ]] && grep -qE '__CLIENT__-(gc|gs)-prod' "${client_dest}"; then
+  if [[ -f "${client_dest}" ]] && grep -qE '__CLIENT__-(gc|gs|lobby|api)-prod' "${client_dest}"; then
+    # shellcheck source=/dev/null
+    # Reuse migration helpers after package files are in place (called late in install).
+    if declare -F _ensure_client_bgsp_aliases >/dev/null 2>&1; then
+      _ensure_client_bgsp_aliases "${client_dest}"
+    else
+      local p
+      for p in \
+        "__CLIENT__-gs-prod" "__CLIENT__-gs-prod-bgsp" \
+        "__CLIENT__-gs-demo-prod" "__CLIENT__-gs-demo-prod-bgsp" \
+        "__CLIENT__-lobby-prod" "__CLIENT__-lobby-prod-bgsp" \
+        "__CLIENT__-api-prod" "__CLIENT__-api-prod-bgsp" \
+        "__CLIENT__-gc-prod" "__CLIENT__-gc-prod-bgsp"; do
+        if ! grep -qx "${p}" "${client_dest}" 2>/dev/null; then
+          printf '%s\n' "${p}" >>"${client_dest}"
+          log "Added ${p} to ${client_dest}"
+        fi
+      done
+    fi
     log "Keeping existing ${client_dest}"
   else
     cp "${PROXIES_ROOT}/config/prefixes-client.env.example" "${client_dest}"

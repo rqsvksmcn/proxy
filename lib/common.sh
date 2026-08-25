@@ -37,10 +37,15 @@ CDN_PREFIXES=(cdn lobby-prod-cdn)
 
 DEFAULT_CLIENT_PREFIXES=(
   "__CLIENT__-gs-prod"
+  "__CLIENT__-gs-prod-bgsp"
   "__CLIENT__-gs-demo-prod"
+  "__CLIENT__-gs-demo-prod-bgsp"
   "__CLIENT__-lobby-prod"
+  "__CLIENT__-lobby-prod-bgsp"
   "__CLIENT__-api-prod"
+  "__CLIENT__-api-prod-bgsp"
   "__CLIENT__-gc-prod"
+  "__CLIENT__-gc-prod-bgsp"
 )
 
 DEFAULT_SHARED_PREFIXES=(
@@ -348,8 +353,8 @@ client_only_origin_prefixes() {
   done < <(_read_prefix_lines "${PREFIXES_CLIENT_FILE}" "${DEFAULT_CLIENT_PREFIXES[@]}")
 }
 
-# Append a shared prefix line if missing (idempotent migration for existing VMs).
-_ensure_shared_prefix_line() {
+# Append a prefix line if missing (idempotent migration for existing VMs).
+_ensure_prefix_line() {
   local file="$1"
   local line="$2"
   [[ -f "${file}" ]] || return 0
@@ -357,6 +362,42 @@ _ensure_shared_prefix_line() {
     printf '%s\n' "${line}" >>"${file}"
     log "Added ${line} to ${file}"
   fi
+}
+
+# Legacy: shared hostnames that must exist with and without -bgsp.
+_ensure_shared_bgsp_aliases() {
+  local file="$1"
+  _ensure_prefix_line "${file}" "player-history-prod-bgsp"
+  _ensure_prefix_line "${file}" "tournaments-prod-bgsp"
+}
+
+# Legacy: every client-specific prefix must exist with and without -bgsp.
+_ensure_client_bgsp_aliases() {
+  local file="$1"
+  local line base
+  local -a existing=()
+  [[ -f "${file}" ]] || return 0
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
+    existing+=("${line}")
+  done <"${file}"
+
+  for line in "${existing[@]}"; do
+    [[ "${line}" == *__CLIENT__* ]] || continue
+    if [[ "${line}" == *-bgsp ]]; then
+      base="${line%-bgsp}"
+      _ensure_prefix_line "${file}" "${base}"
+    else
+      _ensure_prefix_line "${file}" "${line}-bgsp"
+    fi
+  done
+
+  # Guarantee the standard set (both variants).
+  local p
+  for p in "${DEFAULT_CLIENT_PREFIXES[@]}"; do
+    _ensure_prefix_line "${file}" "${p}"
+  done
 }
 
 ensure_prefix_files() {
@@ -369,9 +410,8 @@ ensure_prefix_files() {
     fi
     chmod 644 "${PREFIXES_CLIENT_FILE}"
     log "Wrote ${PREFIXES_CLIENT_FILE}"
-  elif grep -q -- '-bgsp' "${PREFIXES_CLIENT_FILE}" 2>/dev/null; then
-    sed -i 's/-bgsp//g' "${PREFIXES_CLIENT_FILE}"
-    log "Removed -bgsp suffix from ${PREFIXES_CLIENT_FILE}"
+  else
+    _ensure_client_bgsp_aliases "${PREFIXES_CLIENT_FILE}"
   fi
   if [[ ! -f "${PREFIXES_SHARED_FILE}" ]]; then
     if [[ -f "${PROXIES_ROOT}/config/prefixes-shared.env.example" ]]; then
@@ -382,8 +422,7 @@ ensure_prefix_files() {
     chmod 644 "${PREFIXES_SHARED_FILE}"
     log "Wrote ${PREFIXES_SHARED_FILE}"
   else
-    _ensure_shared_prefix_line "${PREFIXES_SHARED_FILE}" "player-history-prod-bgsp"
-    _ensure_shared_prefix_line "${PREFIXES_SHARED_FILE}" "tournaments-prod-bgsp"
+    _ensure_shared_bgsp_aliases "${PREFIXES_SHARED_FILE}"
   fi
 }
 

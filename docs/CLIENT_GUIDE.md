@@ -15,7 +15,7 @@ Once a day (or on demand), the toolkit checks whether a new domain is due. With 
    - **CDN:** `cdn.<domain>` and `lobby-prod-cdn.<domain>` → `--cdn-origin`
    - **Backend:** per-client + shared hostname prefixes → `--backend-origin`
 
-One VM / one rotated domain can host **multiple clients**. Each client is a file under `/etc/proxies/clients/<name>.env`; hostname labels like `{name}-gc-prod` are generated from shared templates.
+One VM / one rotated domain can host **multiple clients**. Each client is a file under `/etc/proxies/clients/<name>.env`; hostname labels like `{name}-gc-prod` and `{name}-gc-prod-bgsp` are generated from shared templates.
 
 How often a **new** domain is purchased is set at install with `--rotate-every-days` (default **1**). Cron still runs daily so incomplete setups can resume and expired local configs can be cleaned up.
 
@@ -135,10 +135,15 @@ When it finishes, it prints the new domain name. Example hostnames for `--client
 cdn.NEWdomain.com
 lobby-prod-cdn.NEWdomain.com
 clientname42-gs-prod.NEWdomain.com
+clientname42-gs-prod-bgsp.NEWdomain.com
 clientname42-gs-demo-prod.NEWdomain.com
+clientname42-gs-demo-prod-bgsp.NEWdomain.com
 clientname42-lobby-prod.NEWdomain.com
+clientname42-lobby-prod-bgsp.NEWdomain.com
 clientname42-api-prod.NEWdomain.com
+clientname42-api-prod-bgsp.NEWdomain.com
 clientname42-gc-prod.NEWdomain.com
+clientname42-gc-prod-bgsp.NEWdomain.com
 lottery-api-instant.NEWdomain.com
 lottery-api-instant-prod.NEWdomain.com
 lottery-web-prod.NEWdomain.com
