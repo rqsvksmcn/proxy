@@ -1,6 +1,8 @@
 # Domain rotation proxy toolkit
 
-Ubuntu **26.04** toolkit that registers a random 20-letter `.com` domain via InternetBS, points DNS (apex + wildcard) at the VM, issues a Let’s Encrypt wildcard certificate, and configures nginx reverse proxies for CDN and origin traffic.
+Ubuntu **26.04** toolkit that registers a random 20-letter domain (default `.com`; configurable via `--tld`), points DNS (apex + wildcard) at the VM, issues a Let’s Encrypt wildcard certificate, and configures nginx reverse proxies for CDN and origin traffic.
+
+Supports registrars **InternetBS** (default) and **Porkbun** (`--registrar porkbun`).
 
 **Clients:** start with the step-by-step guide → [`docs/CLIENT_GUIDE.md`](docs/CLIENT_GUIDE.md)
 
@@ -9,6 +11,8 @@ One VM can host **multiple clients** (hostname prefixes) on the same rotated dom
 ## Client quick start
 
 Host this repository as a **public GitHub repo**, then on the Ubuntu 26.04 VM:
+
+**InternetBS + `.com` (default):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash -s -- \
@@ -24,7 +28,26 @@ curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo b
   --api-password 'STRONG_PASSWORD' \
   --base-url 'https://github.com/OWNER/REPO'
 
-sudo nano /etc/proxies/registrant.env   # required fields; private WHOIS hides them publicly
+sudo nano /etc/proxies/registrant.env   # required for InternetBS; private WHOIS hides them publicly
+sudo /opt/proxies/scripts/force-rotate.sh
+```
+
+**Porkbun + `.xyz`:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash -s -- \
+  --registrar porkbun \
+  --api-key 'YOUR_PORKBUN_API_KEY' \
+  --api-secret 'YOUR_PORKBUN_SECRET_KEY' \
+  --tld xyz \
+  --client 'clientname42' \
+  --cdn-origin 'cdn.your-upstream.example' \
+  --backend-origin 'backend.your-upstream.example' \
+  --email 'you@your-real-domain.com' \
+  --api-user 'domainapi' \
+  --api-password 'STRONG_PASSWORD' \
+  --base-url 'https://github.com/OWNER/REPO'
+
 sudo /opt/proxies/scripts/force-rotate.sh
 ```
 
@@ -56,11 +79,11 @@ Full instructions, day-to-day commands, troubleshooting, and file locations: **[
 | Path | Purpose |
 |------|---------|
 | `/opt/proxies/scripts/manage-clients.sh` | Add/remove/list/sync clients without buying a domain |
-| `/etc/proxies/credentials.env` | API key, password, CDN/backend origins, email, intervals |
+| `/etc/proxies/credentials.env` | Registrar, TLD, API keys, CDN/backend origins, email, intervals |
 | `/etc/proxies/clients/<name>.env` | Per-client id (filename) + optional `CASINO_ID` |
 | `/etc/proxies/prefixes-client.env` | Per-client hostname templates |
 | `/etc/proxies/prefixes-shared.env` | Shared hostname prefixes |
-| `/etc/proxies/registrant.env` | WHOIS contact for Domain/Create |
+| `/etc/proxies/registrant.env` | WHOIS contact for InternetBS Domain/Create (not used with Porkbun) |
 | `/var/lib/proxies/current-domain` | Most recent domain |
 | `/var/lib/proxies/urls/<name>.json` | Per-client URL JSON |
 | `/var/lib/proxies/domains/<domain>/` | Retention stamps (`created`) |
@@ -74,11 +97,13 @@ Full instructions, day-to-day commands, troubleshooting, and file locations: **[
 
 ## Notes
 
-- **Billable:** live `Domain/Create` spends InternetBS balance.
-- Availability is checked with `Domain/Check` before every purchase.
-- Wildcard certs use Certbot DNS-01 hooks against the InternetBS DNS API.
+- **Billable:** live registration spends registrar balance (InternetBS or Porkbun).
+- Choose registrar with `--registrar internetbs|porkbun` and suffix with `--tld` / `--domain-suffix` (default `com`).
+- Availability is checked before every purchase.
+- Wildcard certs use Certbot DNS-01 hooks against the configured registrar’s DNS API.
 - Local cleanup after `DOMAIN_RETENTION_DAYS` deletes nginx sites and runs `certbot delete` for that domain (not the registrar registration). Let's Encrypt may still email about expiry until the cert ages out; it is not auto-revoked.
-- `--email` is used for Let's Encrypt and InternetBS registrant verification (stored as `CERTBOT_EMAIL` in credentials.env).
+- `--email` is used for Let's Encrypt (and InternetBS registrant verification when using InternetBS).
 - Target OS is **Ubuntu 26.04** only (install and rotation scripts enforce this).
 - Package hosting: publish this repo publicly on GitHub and pass `--base-url https://github.com/OWNER/REPO` (optional `--github-ref`).
 - URL API: `GET http://<vm-ip>/api/game/url-extended/<client>` with shared Basic Auth (`--api-user` / `--api-password`).
+- Change registrar/TLD later by editing `REGISTRAR` / `DOMAIN_TLD` (and keys) in `/etc/proxies/credentials.env`.

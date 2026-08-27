@@ -221,20 +221,3 @@ internetbs_point_domain_to_ip() {
   internetbs_dns_add "${domain}" "A" "${ip}"
   internetbs_dns_add "*.${domain}" "A" "${ip}"
 }
-
-find_available_domain() {
-  local max_attempts="${1:-30}"
-  local attempt label domain
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    label="$(random_label 20)"
-    domain="${label}.com"
-    log "Checking availability for ${domain} (attempt ${attempt}/${max_attempts})"
-    if internetbs_domain_available "${domain}"; then
-      log "Domain available: ${domain}"
-      printf '%s\n' "${domain}"
-      return 0
-    fi
-    log "Domain not available: ${domain}"
-  done
-  die "Unable to find an available domain after ${max_attempts} attempts"
-}

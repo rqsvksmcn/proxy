@@ -106,13 +106,43 @@ load_env_file() {
   set +a
 }
 
+# Normalize TLD/suffix: "XYZ" / ".xyz" -> "xyz"
+normalize_domain_tld() {
+  local tld="$1"
+  tld="$(printf '%s' "${tld}" | tr '[:upper:]' '[:lower:]' | sed 's/^\.\+//; s/\.\+$//')"
+  [[ -n "${tld}" ]] || die "Domain TLD/suffix is empty"
+  if [[ ! "${tld}" =~ ^[a-z0-9]+([.-][a-z0-9]+)*$ ]]; then
+    die "Invalid domain TLD/suffix '${tld}' (use e.g. com, xyz, net)"
+  fi
+  printf '%s\n' "${tld}"
+}
+
 load_credentials() {
   load_env_file "${CREDENTIALS_FILE}"
-  [[ -n "${INTERNETBS_API_KEY:-}" ]] || die "INTERNETBS_API_KEY is not set"
-  [[ -n "${INTERNETBS_PASSWORD:-}" ]] || die "INTERNETBS_PASSWORD is not set"
+  REGISTRAR="$(printf '%s' "${REGISTRAR:-internetbs}" | tr '[:upper:]' '[:lower:]')"
+  DOMAIN_TLD="$(normalize_domain_tld "${DOMAIN_TLD:-com}")"
+  export REGISTRAR DOMAIN_TLD
+
+  case "${REGISTRAR}" in
+    internetbs)
+      [[ -n "${INTERNETBS_API_KEY:-}" ]] || die "INTERNETBS_API_KEY is not set"
+      [[ -n "${INTERNETBS_PASSWORD:-}" ]] || die "INTERNETBS_PASSWORD is not set"
+      ;;
+    porkbun)
+      PORKBUN_API_KEY="${PORKBUN_API_KEY:-${INTERNETBS_API_KEY:-}}"
+      PORKBUN_SECRET_API_KEY="${PORKBUN_SECRET_API_KEY:-${INTERNETBS_PASSWORD:-}}"
+      [[ -n "${PORKBUN_API_KEY:-}" ]] || die "PORKBUN_API_KEY is not set"
+      [[ -n "${PORKBUN_SECRET_API_KEY:-}" ]] || die "PORKBUN_SECRET_API_KEY is not set"
+      export PORKBUN_API_KEY PORKBUN_SECRET_API_KEY
+      ;;
+    *)
+      die "Unsupported REGISTRAR='${REGISTRAR}' (use internetbs or porkbun)"
+      ;;
+  esac
+
   [[ -n "${CDN_ORIGIN:-}" ]] || die "CDN_ORIGIN is not set"
   [[ -n "${BACKEND_ORIGIN:-}" ]] || die "BACKEND_ORIGIN is not set"
-  [[ -n "${CERTBOT_EMAIL:-}" ]] || die "CERTBOT_EMAIL is not set (install with --email; used for Let's Encrypt and InternetBS contacts)"
+  [[ -n "${CERTBOT_EMAIL:-}" ]] || die "CERTBOT_EMAIL is not set (install with --email)"
   ROTATION_INTERVAL_DAYS="${ROTATION_INTERVAL_DAYS:-1}"
   DOMAIN_RETENTION_DAYS="${DOMAIN_RETENTION_DAYS:-14}"
   # Normalize origins to hostnames (strip scheme/path if a URL was provided).

@@ -22,6 +22,7 @@ DEFAULT_GITHUB_REF="${PROXIES_GITHUB_REF:-main}"
 
 API_KEY=""
 PASSWORD=""
+API_SECRET=""
 CLIENT_NAME=""
 CASINO_ID=""
 CLIENTS=()
@@ -41,6 +42,8 @@ BACKEND_ORIGIN=""
 CERTBOT_EMAIL=""
 ROTATION_INTERVAL_DAYS=1
 DOMAIN_RETENTION_DAYS=14
+REGISTRAR="internetbs"
+DOMAIN_TLD="com"
 
 PACKAGE_FILES=(
   "scripts/rotate-domain.sh"
@@ -49,6 +52,8 @@ PACKAGE_FILES=(
   "scripts/cleanup.sh"
   "lib/common.sh"
   "lib/internetbs.sh"
+  "lib/porkbun.sh"
+  "lib/registrar.sh"
   "lib/ssl.sh"
   "lib/nginx.sh"
   "lib/urls.sh"
@@ -69,19 +74,28 @@ PACKAGE_FILES=(
 
 usage() {
   cat <<'EOF'
-Usage: install.sh --api-key KEY --password PASS --client NAME \
-  --cdn-origin HOST --backend-origin HOST --base-url REPO_URL [options]
+Usage: install.sh --api-key KEY --client NAME \
+  --cdn-origin HOST --backend-origin HOST --email EMAIL --base-url REPO_URL [options]
+
+Registrar credentials:
+  InternetBS (default):  --api-key KEY --password PASS
+  Porkbun:               --registrar porkbun --api-key KEY --api-secret SECRET
+                         (--password is accepted as an alias for --api-secret)
 
 Options:
-  --api-key KEY           InternetBS API key (required)
-  --password PASS         InternetBS API password (required)
+  --api-key KEY           Registrar API key (required)
+  --password PASS         InternetBS API password, or Porkbun secret (alias of --api-secret)
+  --api-secret SECRET     Porkbun secret API key (required when --registrar porkbun)
+  --registrar NAME        internetbs (default) or porkbun
+  --tld SUFFIX            Domain suffix without leading dot (default: com). Examples: com, xyz, net
+  --domain-suffix SUFFIX  Alias for --tld
   --client NAME           Client id for hostname prefixes (repeatable; ≥1 required).
                           Creates /etc/proxies/clients/<NAME>.env
   --client-name NAME      Alias for a single --client (legacy)
   --cdn-origin HOST       Upstream host for CDN vhost (required), e.g. cdn.example.com
   --backend-origin HOST   Upstream host for backend/origin vhost (required), e.g. p4.example.com
-  --email EMAIL           Real mailbox used for Let's Encrypt and InternetBS registrant
-                          verification (required). Confirm InternetBS messages sent here.
+  --email EMAIL           Real mailbox used for Let's Encrypt (and InternetBS registrant
+                          verification when using InternetBS). Required.
   --rotate-every-days N   Buy a new domain every N days (default: 1). Cron still runs daily
                           to resume incomplete jobs and clean expired local configs.
   --retention-days N      Keep each domain's local nginx/certs for N days (default: 14).
@@ -97,7 +111,7 @@ Options:
   --github-ref REF        Branch/tag when --base-url is https://github.com/OWNER/REPO (default: main)
   --local-dir PATH        Copy package from a local directory instead of downloading
   --prefix DIR            Install under DIR (sets root/etc/state for testing)
-  --registrant-file PATH  Existing registrant.env to install
+  --registrant-file PATH  Existing registrant.env to install (InternetBS)
   --run-now               Run first domain rotation after install
   --skip-cron             Do not install daily cron job
   --skip-packages         Do not apt-install nginx/certbot (for dry tests)
@@ -169,6 +183,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --password)
       PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --api-secret)
+      API_SECRET="${2:-}"
+      shift 2
+      ;;
+    --registrar)
+      REGISTRAR="${2:-}"
+      shift 2
+      ;;
+    --tld|--domain-suffix)
+      DOMAIN_TLD="${2:-}"
       shift 2
       ;;
     --client|--client-name)
@@ -270,7 +296,23 @@ if [[ -z "${PREFIX}" ]]; then
 fi
 
 [[ -n "${API_KEY}" ]] || die "--api-key is required"
-[[ -n "${PASSWORD}" ]] || die "--password is required"
+REGISTRAR="$(printf '%s' "${REGISTRAR}" | tr '[:upper:]' '[:lower:]')"
+case "${REGISTRAR}" in
+  internetbs|porkbun) ;;
+  *) die "--registrar must be internetbs or porkbun (got: ${REGISTRAR})" ;;
+esac
+# Porkbun: --api-secret preferred; --password accepted as alias.
+if [[ "${REGISTRAR}" == "porkbun" ]]; then
+  API_SECRET="${API_SECRET:-${PASSWORD}}"
+  [[ -n "${API_SECRET}" ]] || die "--api-secret is required for --registrar porkbun (or pass --password as the secret)"
+else
+  [[ -n "${PASSWORD}" ]] || die "--password is required for --registrar internetbs"
+fi
+DOMAIN_TLD="$(printf '%s' "${DOMAIN_TLD}" | tr '[:upper:]' '[:lower:]' | sed 's/^\.\+//; s/\.\+$//')"
+[[ -n "${DOMAIN_TLD}" ]] || die "--tld must not be empty"
+if [[ ! "${DOMAIN_TLD}" =~ ^[a-z0-9]+([.-][a-z0-9]+)*$ ]]; then
+  die "Invalid --tld '${DOMAIN_TLD}' (use e.g. com, xyz, net)"
+fi
 [[ ${#CLIENTS[@]} -gt 0 ]] || die "At least one --client NAME is required (or legacy --client-name)"
 [[ -n "${CDN_ORIGIN}" ]] || die "--cdn-origin is required"
 [[ -n "${BACKEND_ORIGIN}" ]] || die "--backend-origin is required"
@@ -352,16 +394,27 @@ write_credentials() {
   # Traversable by nginx; secret files below stay 600.
   chmod 755 "${PROXIES_ETC}" "${PROXIES_STATE}" "${PROXIES_STATE}/domains" "${PROXIES_STATE}/urls" "${PROXIES_ETC}/clients" 2>/dev/null || true
   cat >"${PROXIES_ETC}/credentials.env" <<EOF
-INTERNETBS_API_KEY="${API_KEY}"
-INTERNETBS_PASSWORD="${PASSWORD}"
+REGISTRAR="${REGISTRAR}"
+DOMAIN_TLD="${DOMAIN_TLD}"
 CDN_ORIGIN="${CDN_ORIGIN}"
 BACKEND_ORIGIN="${BACKEND_ORIGIN}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL}"
 ROTATION_INTERVAL_DAYS="${ROTATION_INTERVAL_DAYS}"
 DOMAIN_RETENTION_DAYS="${DOMAIN_RETENTION_DAYS}"
 EOF
+  if [[ "${REGISTRAR}" == "porkbun" ]]; then
+    cat >>"${PROXIES_ETC}/credentials.env" <<EOF
+PORKBUN_API_KEY="${API_KEY}"
+PORKBUN_SECRET_API_KEY="${API_SECRET}"
+EOF
+  else
+    cat >>"${PROXIES_ETC}/credentials.env" <<EOF
+INTERNETBS_API_KEY="${API_KEY}"
+INTERNETBS_PASSWORD="${PASSWORD}"
+EOF
+  fi
   chmod 600 "${PROXIES_ETC}/credentials.env"
-  log "Wrote ${PROXIES_ETC}/credentials.env (rotate every ${ROTATION_INTERVAL_DAYS}d; retain ${DOMAIN_RETENTION_DAYS}d)"
+  log "Wrote ${PROXIES_ETC}/credentials.env (registrar=${REGISTRAR}; tld=.${DOMAIN_TLD}; rotate every ${ROTATION_INTERVAL_DAYS}d; retain ${DOMAIN_RETENTION_DAYS}d)"
 }
 
 install_clients() {
@@ -477,6 +530,16 @@ write_api_htpasswd() {
 
 install_registrant() {
   local dest="${PROXIES_ETC}/registrant.env"
+
+  # Porkbun uses account-level contacts; registrant.env is only required for InternetBS.
+  if [[ "${REGISTRAR}" == "porkbun" ]]; then
+    if [[ -n "${REGISTRANT_SRC}" ]]; then
+      log "Ignoring --registrant-file (not used with --registrar porkbun)"
+    fi
+    log "Skipping registrant.env (Porkbun uses account contacts / WHOIS privacy)"
+    return 0
+  fi
+
   if [[ -n "${REGISTRANT_SRC}" ]]; then
     [[ -f "${REGISTRANT_SRC}" ]] || die "Registrant file not found: ${REGISTRANT_SRC}"
     cp "${REGISTRANT_SRC}" "${dest}"
@@ -613,7 +676,22 @@ main() {
       PROXIES_STATE="${PROXIES_STATE}" \
       "${PROXIES_ROOT}/scripts/rotate-domain.sh"
   else
-    cat <<EOF
+    if [[ "${REGISTRAR}" == "porkbun" ]]; then
+      cat <<EOF
+
+Next steps:
+  1. Ensure the Porkbun account has credit, verified email/phone, and can register via API
+  2. Add/remove clients: ${PROXIES_ROOT}/scripts/manage-clients.sh add|remove|list|sync
+  3. Force first domain now: ${PROXIES_ROOT}/scripts/force-rotate.sh
+  4. Or re-run install with --run-now
+  5. Read: ${PROXIES_ROOT}/docs/CLIENT_GUIDE.md
+
+Registrar: porkbun | Domain suffix: .${DOMAIN_TLD}
+Clients installed: ${CLIENTS[*]}
+Domains stay configured for ${DOMAIN_RETENTION_DAYS} days (DOMAIN_RETENTION_DAYS under ${PROXIES_ETC}/credentials.env).
+EOF
+    else
+      cat <<EOF
 
 Next steps:
   1. Edit ${PROXIES_ETC}/registrant.env contact details (email comes from --email / CERTBOT_EMAIL)
@@ -623,9 +701,11 @@ Next steps:
   5. Confirm InternetBS verification emails sent to the --email address
   6. Read: ${PROXIES_ROOT}/docs/CLIENT_GUIDE.md
 
+Registrar: internetbs | Domain suffix: .${DOMAIN_TLD}
 Clients installed: ${CLIENTS[*]}
 Domains stay configured for ${DOMAIN_RETENTION_DAYS} days (DOMAIN_RETENTION_DAYS under ${PROXIES_ETC}/credentials.env).
 EOF
+    fi
   fi
 }
 

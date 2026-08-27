@@ -6,8 +6,8 @@ This guide explains how to install and operate the proxy toolkit on an **Ubuntu 
 
 Once a day (or on demand), the toolkit checks whether a new domain is due. With the default interval it:
 
-1. Picks a **random 20-letter `.com` domain**
-2. Checks that it is **available** on InternetBS
+1. Picks a **random 20-letter domain** under the configured suffix (`--tld`, default `.com`)
+2. Checks that it is **available** at the configured registrar (`--registrar`: `internetbs` or `porkbun`)
 3. **Registers** the domain
 4. Points the domain and `*.domain` DNS **A** records to this VM’s public IP
 5. Issues a **wildcard SSL certificate** (Let’s Encrypt)
@@ -31,15 +31,17 @@ Before you start, make sure you have:
 |-------------|--------|
 | Ubuntu 26.04 server | Fresh VM is fine; install/rotation refuse other releases |
 | Root / sudo access | Install and rotation must run as root |
-| InternetBS API key + password | Reseller API credentials |
-| Funds on the InternetBS account | Each new domain is a paid registration |
+| Registrar API credentials | InternetBS key+password **or** Porkbun API key+secret |
+| Funds on the registrar account | Each new domain is a paid registration |
 | One or more client ids | Hostname prefix id(s), e.g. `clientname42` (`--client`, repeatable) |
 | CDN origin host | Upstream for CDN vhost (`--cdn-origin`) |
 | Backend origin host | Upstream for backend vhost (`--backend-origin`) |
-| Real email address | `--email`: Let's Encrypt ACME account + InternetBS registrant verification |
+| Real email address | `--email`: Let's Encrypt ACME account (+ InternetBS verification when using InternetBS) |
 | Public GitHub repo URL | Used as `--base-url` (installer downloads package files from it) |
 
-Optional but recommended: a filled **registrant / WHOIS** contact file (name, phone, address). Domain registration cannot complete without it. Email comes from `--email`.
+Optional: **`--tld`** / **`--domain-suffix`** (default `com`) — e.g. `xyz`, `net`.
+
+For **InternetBS**, a filled **registrant / WHOIS** contact file is required (name, phone, address). Email comes from `--email`. **Porkbun** uses account contacts / WHOIS privacy and does not need `registrant.env`.
 
 ---
 
@@ -59,6 +61,23 @@ curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo b
   --backend-origin 'backend.your-upstream.example' \
   --email 'you@your-real-domain.com' \
   --rotate-every-days 2 \
+  --api-user 'domainapi' \
+  --api-password 'CHOOSE_A_STRONG_PASSWORD' \
+  --base-url 'https://github.com/OWNER/REPO'
+```
+
+Porkbun example (`.xyz`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash -s -- \
+  --registrar porkbun \
+  --api-key 'YOUR_PORKBUN_API_KEY' \
+  --api-secret 'YOUR_PORKBUN_SECRET_KEY' \
+  --tld xyz \
+  --client 'clientname42' \
+  --cdn-origin 'cdn.your-upstream.example' \
+  --backend-origin 'backend.your-upstream.example' \
+  --email 'you@your-real-domain.com' \
   --api-user 'domainapi' \
   --api-password 'CHOOSE_A_STRONG_PASSWORD' \
   --base-url 'https://github.com/OWNER/REPO'
@@ -87,10 +106,12 @@ This will:
 - Create `/etc/proxies/clients/<name>.env` for each `--client`
 - Install prefix templates: `prefixes-client.env` + `prefixes-shared.env`
 - Create Basic Auth for the IP API (`/etc/proxies/api.htpasswd`)
-- Create a placeholder `/etc/proxies/registrant.env`
+- Create a placeholder `/etc/proxies/registrant.env` (InternetBS only; skipped for Porkbun)
 - Schedule a daily check at **03:00** (system time); purchases follow `--rotate-every-days`
 
-### Step 2 — Registrant contact (required by API, private in WHOIS)
+### Step 2 — Registrant contact (InternetBS only)
+
+Skip this step when using `--registrar porkbun` (account contacts / WHOIS privacy apply).
 
 InternetBS **requires** contact fields on Domain/Create (name, phone, street, city, country, postal code). They cannot be omitted.
 
@@ -297,11 +318,15 @@ sudo cat /var/lib/proxies/current-domain
 sudo cat /var/lib/proxies/domains/*/status
 ```
 
-To change the scheduled purchase interval or retention later without reinstalling:
+To change the scheduled purchase interval, retention, registrar, or TLD later without reinstalling:
 
 ```bash
 sudo sed -i 's/^ROTATION_INTERVAL_DAYS=.*/ROTATION_INTERVAL_DAYS=3/' /etc/proxies/credentials.env
 sudo sed -i 's/^DOMAIN_RETENTION_DAYS=.*/DOMAIN_RETENTION_DAYS=21/' /etc/proxies/credentials.env
+# optional:
+# sudo sed -i 's/^DOMAIN_TLD=.*/DOMAIN_TLD=xyz/' /etc/proxies/credentials.env
+# sudo sed -i 's/^REGISTRAR=.*/REGISTRAR=porkbun/' /etc/proxies/credentials.env
+# (also set PORKBUN_API_KEY / PORKBUN_SECRET_API_KEY or INTERNETBS_* as needed)
 ```
 
 ---
@@ -346,13 +371,16 @@ sudo nginx -t && sudo systemctl reload nginx
 
 | Option | Meaning |
 |--------|---------|
-| `--api-key` | InternetBS API key (**required**) |
-| `--password` | InternetBS password (**required**) |
+| `--api-key` | Registrar API key (**required**) |
+| `--password` | InternetBS password, or Porkbun secret alias (**required** for InternetBS) |
+| `--api-secret` | Porkbun secret API key (**required** for `--registrar porkbun`) |
+| `--registrar` | `internetbs` (default) or `porkbun` |
+| `--tld` / `--domain-suffix` | Domain suffix without leading dot (default: `com`), e.g. `xyz` |
 | `--client NAME` | Client id for hostname prefixes (**required**, repeatable) |
 | `--client-name NAME` | Legacy alias for a single `--client` |
 | `--cdn-origin` | Upstream host for CDN vhost (**required**), e.g. `cdn.example.com` |
 | `--backend-origin` | Upstream host for backend vhost (**required**), e.g. `p4.example.com` |
-| `--email` | Real mailbox for Let's Encrypt **and** InternetBS registrant verification (**required**) |
+| `--email` | Real mailbox for Let's Encrypt (**required**; also InternetBS verification when using InternetBS) |
 | `--rotate-every-days N` | Purchase a new domain every N days (default: `1`, max: `365`). Cron still runs daily. |
 | `--retention-days N` | Keep each domain’s local nginx sites and certs for N days (default: `14`, max: `365`). |
 | `--casino-id` | Written into the client `.env` only when exactly one `--client` is installed |
@@ -360,7 +388,7 @@ sudo nginx -t && sudo systemctl reload nginx
 | `--api-password` | Basic Auth password for `/api/game/url-extended` |
 | `--base-url` | Public GitHub repo URL (or raw.githubusercontent.com root) |
 | `--github-ref` | Branch/tag when repo URL has no `/tree/...` (default: `main`) |
-| `--registrant-file` | Path to a ready `registrant.env` |
+| `--registrant-file` | Path to a ready `registrant.env` (InternetBS) |
 | `--run-now` | Register the first domain immediately after install |
 | `--skip-cron` | Do not create the daily cron job |
 | `--local-dir` | Install from a local folder instead of downloading (support / testing) |
@@ -377,13 +405,13 @@ sudo nginx -t && sudo systemctl reload nginx
 | `/opt/proxies/scripts/manage-clients.sh` | Add / remove / list / sync clients after install |
 | `/opt/proxies/scripts/rotate-domain.sh` | Same pipeline (used by cron and force-rotate) |
 | `/opt/proxies/docs/CLIENT_GUIDE.md` | This guide (installed copy) |
-| `/etc/proxies/credentials.env` | API key, password, origins, email, `ROTATION_INTERVAL_DAYS`, `DOMAIN_RETENTION_DAYS` |
+| `/etc/proxies/credentials.env` | `REGISTRAR`, `DOMAIN_TLD`, API keys, origins, email, intervals |
+| `/etc/proxies/registrant.env` | WHOIS contact for InternetBS (not used with Porkbun) |
 | `/etc/proxies/clients/<name>.env` | Per-client config (filename = client id; optional `CASINO_ID`) |
 | `/etc/proxies/prefixes-client.env` | Per-client hostname templates (`__CLIENT__-…`) |
 | `/etc/proxies/prefixes-shared.env` | Shared hostname prefixes |
 | `/var/lib/proxies/pending-domain` | Incomplete purchase being resumed (if any) |
 | `/var/lib/proxies/domains/<domain>/status` | `purchased` → `dns_configured` → `ssl_issued` → `active` |
-| `/etc/proxies/registrant.env` | WHOIS contact used for registrations |
 | `/etc/proxies/api.htpasswd` | Basic Auth for `/api/game/url-extended` |
 | `/var/lib/proxies/urls/<name>.json` | Per-client URL payload |
 | `/var/lib/proxies/current-urls.json` | Copy of first client JSON (debug); API uses `/urls/<client>.json` |

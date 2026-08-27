@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Daily domain rotation: register new .com, DNS, wildcard cert, nginx vhosts.
+# Daily domain rotation: register new domain, DNS, wildcard cert, nginx vhosts.
 # Existing domains remain reachable until older than DOMAIN_RETENTION_DAYS (default 14).
 #
 # If a previous run purchased a domain but failed later (e.g. SSL), the next run
@@ -11,7 +11,7 @@ PROXIES_ROOT="${PROXIES_ROOT:-/opt/proxies}"
 # shellcheck disable=SC1091
 source "${PROXIES_ROOT}/lib/common.sh"
 # shellcheck disable=SC1091
-source "${PROXIES_ROOT}/lib/internetbs.sh"
+source "${PROXIES_ROOT}/lib/registrar.sh"
 # shellcheck disable=SC1091
 source "${PROXIES_ROOT}/lib/ssl.sh"
 # shellcheck disable=SC1091
@@ -23,12 +23,13 @@ usage() {
   cat <<'EOF'
 Usage: rotate-domain.sh [options]
 
-Registers a new random .com domain, configures DNS + wildcard SSL + nginx.
+Registers a new random domain (suffix from DOMAIN_TLD), configures DNS + wildcard SSL + nginx.
 If a prior purchase was incomplete, resumes that domain (no new spend).
 
 Options:
-  --api-key KEY           InternetBS API key (optional if credentials.env exists)
-  --password PASS         InternetBS password
+  --api-key KEY           Registrar API key (optional if credentials.env exists)
+  --password PASS         InternetBS password / Porkbun secret (optional)
+  --api-secret SECRET     Alias for Porkbun secret API key
   --client-name NAME      Client name
   --resume-domain NAME    Resume setup for an already-purchased domain
   --force-new             Buy a new domain even if an incomplete one exists
@@ -44,6 +45,7 @@ FORCE_NEW=0
 RESUME_DOMAIN=""
 CLI_API_KEY=""
 CLI_PASSWORD=""
+CLI_API_SECRET=""
 CLI_CLIENT_NAME=""
 
 while [[ $# -gt 0 ]]; do
@@ -54,6 +56,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --password)
       CLI_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --api-secret)
+      CLI_API_SECRET="${2:-}"
       shift 2
       ;;
     --client-name)
@@ -90,7 +96,7 @@ require_root
 require_ubuntu_2604
 ensure_runtime_dirs
 
-if [[ -n "${CLI_API_KEY}" || -n "${CLI_PASSWORD}" || -n "${CLI_CLIENT_NAME}" ]]; then
+if [[ -n "${CLI_API_KEY}" || -n "${CLI_PASSWORD}" || -n "${CLI_API_SECRET}" || -n "${CLI_CLIENT_NAME}" ]]; then
   mkdir -p "${PROXIES_ETC}"
   # Preserve existing origins/email when only overriding a subset via CLI.
   if [[ -f "${CREDENTIALS_FILE}" ]]; then
@@ -100,15 +106,29 @@ if [[ -n "${CLI_API_KEY}" || -n "${CLI_PASSWORD}" || -n "${CLI_CLIENT_NAME}" ]];
     source "${CREDENTIALS_FILE}"
     set +a
   fi
+  REGISTRAR="$(printf '%s' "${REGISTRAR:-internetbs}" | tr '[:upper:]' '[:lower:]')"
+  DOMAIN_TLD="$(normalize_domain_tld "${DOMAIN_TLD:-com}")"
+  secret="${CLI_API_SECRET:-${CLI_PASSWORD:-}}"
   cat >"${CREDENTIALS_FILE}" <<EOF
-INTERNETBS_API_KEY="${CLI_API_KEY:-${INTERNETBS_API_KEY:-}}"
-INTERNETBS_PASSWORD="${CLI_PASSWORD:-${INTERNETBS_PASSWORD:-}}"
+REGISTRAR="${REGISTRAR}"
+DOMAIN_TLD="${DOMAIN_TLD}"
 CDN_ORIGIN="${CDN_ORIGIN:-}"
 BACKEND_ORIGIN="${BACKEND_ORIGIN:-}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 ROTATION_INTERVAL_DAYS="${ROTATION_INTERVAL_DAYS:-1}"
 DOMAIN_RETENTION_DAYS="${DOMAIN_RETENTION_DAYS:-14}"
 EOF
+  if [[ "${REGISTRAR}" == "porkbun" ]]; then
+    cat >>"${CREDENTIALS_FILE}" <<EOF
+PORKBUN_API_KEY="${CLI_API_KEY:-${PORKBUN_API_KEY:-}}"
+PORKBUN_SECRET_API_KEY="${secret:-${PORKBUN_SECRET_API_KEY:-}}"
+EOF
+  else
+    cat >>"${CREDENTIALS_FILE}" <<EOF
+INTERNETBS_API_KEY="${CLI_API_KEY:-${INTERNETBS_API_KEY:-}}"
+INTERNETBS_PASSWORD="${CLI_PASSWORD:-${INTERNETBS_PASSWORD:-}}"
+EOF
+  fi
   chmod 600 "${CREDENTIALS_FILE}"
   if [[ -n "${CLI_CLIENT_NAME}" ]]; then
     mkdir -p "${CLIENTS_DIR}"
@@ -121,7 +141,10 @@ EOF
 fi
 
 load_credentials
-load_registrant
+load_registrar
+if registrar_needs_registrant; then
+  load_registrant
+fi
 ensure_prefix_files
 
 if [[ "${CLEANUP_ONLY}" -eq 1 ]]; then
@@ -131,7 +154,7 @@ fi
 
 ROTATION_INTERVAL_DAYS="${ROTATION_INTERVAL_DAYS:-1}"
 DOMAIN_RETENTION_DAYS="${DOMAIN_RETENTION_DAYS:-14}"
-log "Starting domain rotation for clients=${CLIENT_NAMES[*]} (interval=${ROTATION_INTERVAL_DAYS}d; retention=${DOMAIN_RETENTION_DAYS}d)"
+log "Starting domain rotation for clients=${CLIENT_NAMES[*]} (registrar=${REGISTRAR}; tld=.${DOMAIN_TLD}; interval=${ROTATION_INTERVAL_DAYS}d; retention=${DOMAIN_RETENTION_DAYS}d)"
 
 PUBLIC_IP="$(detect_public_ip)"
 log "Detected public IP: ${PUBLIC_IP}"
@@ -162,24 +185,26 @@ else
     fi
     exit 0
   fi
-  log "Searching for an available random .com via InternetBS Domain/Check"
+  log "Searching for an available random .${DOMAIN_TLD} via ${REGISTRAR}"
   DOMAIN="$(find_available_domain 30)"
   log "Selected available domain: ${DOMAIN}"
-  internetbs_register_domain "${DOMAIN}"
+  registrar_register_domain "${DOMAIN}"
   mark_domain_purchased "${DOMAIN}"
   STATUS="${DOMAIN_STATUS_PURCHASED}"
 fi
 
+export REGISTRAR_ZONE="${DOMAIN}"
+
 # --- DNS ---
 if [[ "${STATUS}" == "${DOMAIN_STATUS_PURCHASED}" ]]; then
-  internetbs_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}"
+  registrar_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}"
   mark_domain_dns_configured "${DOMAIN}"
   STATUS="${DOMAIN_STATUS_DNS}"
   log "Waiting briefly for DNS zone to settle before ACME challenge"
   sleep 30
 elif [[ "${STATUS}" == "${DOMAIN_STATUS_DNS}" || "${STATUS}" == "${DOMAIN_STATUS_SSL}" ]]; then
   log "Re-asserting DNS A records for ${DOMAIN} -> ${PUBLIC_IP}"
-  internetbs_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}" || true
+  registrar_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}" || true
 fi
 
 # --- SSL ---
