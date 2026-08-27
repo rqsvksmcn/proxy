@@ -3,8 +3,8 @@
 # Requires: curl, jq, PORKBUN_API_KEY, PORKBUN_SECRET_API_KEY
 #
 # Errors: functions return non-zero and set PORKBUN_LAST_ERROR / PORKBUN_LAST_BODY.
-# Do not call die() from inside $(...); callers should use:
-#   json="$(porkbun_request ...)" || die "Porkbun: ${PORKBUN_LAST_ERROR}"
+# Never capture porkbun_request with $(...) — that drops those globals. Call it bare,
+# then read PORKBUN_LAST_BODY.
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -46,8 +46,10 @@ porkbun_require_keys() {
 
 # POST JSON to path; merge extra object fields into the auth body.
 # Optional Idempotency-Key via PORKBUN_IDEMPOTENCY_KEY.
-# On success: prints body, sets PORKBUN_LAST_BODY, returns 0.
-# On failure: sets PORKBUN_LAST_ERROR, returns 1 (safe inside $(...)).
+#
+# IMPORTANT: Do not capture this with json="$(porkbun_request ...)" — that runs in a
+# subshell and drops PORKBUN_LAST_ERROR / PORKBUN_LAST_BODY. Call it bare, then read
+# PORKBUN_LAST_BODY on success.
 porkbun_request() {
   local path="$1"
   local extra_json="${2:-{}}"
@@ -102,18 +104,18 @@ porkbun_request() {
   PORKBUN_LAST_BODY="${body}"
 
   if [[ "${http_code}" != "200" ]]; then
-    PORKBUN_LAST_ERROR="HTTP ${http_code} for ${path}: ${body}"
+    PORKBUN_LAST_ERROR="HTTP ${http_code} for ${path}: ${body:-<empty body>}"
     return 1
   fi
 
   local status
   status="$(jq -r '.status // empty' <<<"${body}" 2>/dev/null || true)"
   if [[ "$(printf '%s' "${status}" | tr '[:lower:]' '[:upper:]')" != "SUCCESS" ]]; then
-    PORKBUN_LAST_ERROR="API status='${status}' for ${path}: ${body}"
+    PORKBUN_LAST_ERROR="API status='${status:-empty}' for ${path}: ${body:-<empty body>}"
     return 1
   fi
 
-  printf '%s\n' "${body}"
+  return 0
 }
 
 # Zone apex for relative DNS names (set by rotate / certbot).
@@ -142,9 +144,10 @@ porkbun_domain_available() {
   local domain="$1"
   local json avail
 
-  if ! json="$(porkbun_request "/domain/checkDomain/${domain}" '{}')"; then
-    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR}"
+  if ! porkbun_request "/domain/checkDomain/${domain}" '{}'; then
+    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR:-unknown error}"
   fi
+  json="${PORKBUN_LAST_BODY}"
 
   avail="$(jq -r '.response.avail // .avail // empty' <<<"${json}")"
   case "$(printf '%s' "${avail}" | tr '[:upper:]' '[:lower:]')" in
@@ -156,13 +159,11 @@ porkbun_domain_available() {
         // .price
         // empty
       ' <<<"${json}")"
-      # price may be a nested object in newer API shapes
       if [[ -z "${PORKBUN_LAST_PRICE_USD}" || "${PORKBUN_LAST_PRICE_USD}" == "null" ]]; then
         PORKBUN_LAST_PRICE_USD="$(jq -r '
           .response.price.registration // empty
         ' <<<"${json}")"
       fi
-      # If jq returned a JSON object, try .registration inside it as string via tostring paths
       if [[ "${PORKBUN_LAST_PRICE_USD}" == \{* ]]; then
         PORKBUN_LAST_PRICE_USD="$(jq -r '.registration // .renew // empty' <<<"${PORKBUN_LAST_PRICE_USD}")"
       fi
@@ -202,11 +203,12 @@ porkbun_register_domain() {
   export PORKBUN_IDEMPOTENCY_KEY
 
   extra="$(jq -nc --argjson cost "${cost_cents}" '{cost: $cost, agreeToTerms: "yes", whoisPrivacy: true}')"
-  if ! json="$(porkbun_request "/domain/create/${domain}" "${extra}")"; then
+  if ! porkbun_request "/domain/create/${domain}" "${extra}"; then
     unset PORKBUN_IDEMPOTENCY_KEY || true
-    die "Porkbun domain/create failed for ${domain}: ${PORKBUN_LAST_ERROR}"
+    die "Porkbun domain/create failed for ${domain}: ${PORKBUN_LAST_ERROR:-unknown error}"
   fi
   unset PORKBUN_IDEMPOTENCY_KEY || true
+  json="${PORKBUN_LAST_BODY}"
 
   log "Registered domain ${domain} via Porkbun: $(jq -c '{status,domain,message}' <<<"${json}" 2>/dev/null || printf '%s' "${json}")"
 }
@@ -232,9 +234,10 @@ porkbun_dns_add() {
     porkbun_dns_remove "${full_name}" "${type}" || true
   fi
 
-  if ! json="$(porkbun_request "/dns/create/${zone}" "${extra}")"; then
-    die "Porkbun DNS add failed for ${full_name}: ${PORKBUN_LAST_ERROR}"
+  if ! porkbun_request "/dns/create/${zone}" "${extra}"; then
+    die "Porkbun DNS add failed for ${full_name}: ${PORKBUN_LAST_ERROR:-unknown error}"
   fi
+  json="${PORKBUN_LAST_BODY}"
   log "DNS ${type} ${full_name} -> ${value} (porkbun id=$(jq -r '.id // empty' <<<"${json}"))"
 }
 
@@ -248,11 +251,11 @@ porkbun_dns_remove() {
   sub="$(porkbun_subdomain_from_full "${full_name}" "${zone}")"
 
   if [[ -n "${value}" ]]; then
-    json="$(porkbun_request "/dns/retrieveByNameType/${zone}/${type}/${sub}" '{}' || true)"
-    if [[ -n "${json}" ]]; then
+    if porkbun_request "/dns/retrieveByNameType/${zone}/${type}/${sub}" '{}'; then
+      json="${PORKBUN_LAST_BODY}"
       while IFS= read -r id; do
         [[ -n "${id}" && "${id}" != "null" ]] || continue
-        porkbun_request "/dns/delete/${zone}/${id}" '{}' >/dev/null || true
+        porkbun_request "/dns/delete/${zone}/${id}" '{}' || true
         log "DNS remove ${type} ${full_name} id=${id}"
       done < <(jq -r --arg v "${value}" '
         (.records // [])[]
@@ -264,10 +267,10 @@ porkbun_dns_remove() {
   fi
 
   if [[ -n "${sub}" ]]; then
-    porkbun_request "/dns/deleteByNameType/${zone}/${type}/${sub}" '{}' >/dev/null || true
+    porkbun_request "/dns/deleteByNameType/${zone}/${type}/${sub}" '{}' || true
   else
-    porkbun_request "/dns/deleteByNameType/${zone}/${type}/" '{}' >/dev/null \
-      || porkbun_request "/dns/deleteByNameType/${zone}/${type}" '{}' >/dev/null \
+    porkbun_request "/dns/deleteByNameType/${zone}/${type}/" '{}' \
+      || porkbun_request "/dns/deleteByNameType/${zone}/${type}" '{}' \
       || true
   fi
   log "DNS remove ${type} ${full_name}: ok"
