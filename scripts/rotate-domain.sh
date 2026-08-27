@@ -192,6 +192,7 @@ else
   fi
   log "Searching for an available random .${DOMAIN_TLD} via ${REGISTRAR}"
   DOMAIN="$(find_available_domain 30)"
+  load_porkbun_quote_if_any
   log "Selected available domain: ${DOMAIN}"
   registrar_register_domain "${DOMAIN}"
   mark_domain_purchased "${DOMAIN}"
@@ -199,6 +200,9 @@ else
 fi
 
 export REGISTRAR_ZONE="${DOMAIN}"
+
+# Disposable domains: always assert auto-renew is off (idempotent; covers resume of older purchases).
+registrar_disable_auto_renew "${DOMAIN}"
 
 # --- DNS ---
 if [[ "${STATUS}" == "${DOMAIN_STATUS_PURCHASED}" ]]; then

@@ -55,6 +55,19 @@ registrar_register_domain() {
   esac
 }
 
+# Turn off registrar auto-renew for disposable rotated domains.
+registrar_disable_auto_renew() {
+  case "${REGISTRAR}" in
+    porkbun) porkbun_disable_auto_renew "$@" ;;
+    cloudflare)
+      log "Cloudflare registration already uses auto_renew=false; nothing to disable"
+      ;;
+    internetbs)
+      log "InternetBS: auto-renew disable not wired via API; confirm in the registrar panel"
+      ;;
+  esac
+}
+
 registrar_dns_add() {
   case "${REGISTRAR}" in
     internetbs) internetbs_dns_add "$@" ;;
@@ -87,12 +100,23 @@ find_available_domain() {
   local attempt label domain
   local tld="${DOMAIN_TLD:-com}"
 
+  FOUND_DOMAIN=""
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     label="$(random_label 20)"
     domain="${label}.${tld}"
     log "Checking availability for ${domain} (attempt ${attempt}/${max_attempts}, registrar=${REGISTRAR})"
     if registrar_domain_available "${domain}"; then
       log "Domain available: ${domain}"
+      # Must set globals here — callers often use DOMAIN="$(find_available_domain)" which
+      # runs this function in a subshell and would otherwise drop Porkbun quote vars.
+      FOUND_DOMAIN="${domain}"
+      if [[ "${REGISTRAR}" == "porkbun" ]]; then
+        # Persist quote for the parent shell after command-substitution returns.
+        printf 'PORKBUN_LAST_CHECKED_DOMAIN=%q\nPORKBUN_LAST_PRICE_USD=%q\n' \
+          "${PORKBUN_LAST_CHECKED_DOMAIN:-${domain}}" \
+          "${PORKBUN_LAST_PRICE_USD:-}" \
+          >"${PROXIES_STATE}/porkbun-last-quote.env"
+      fi
       printf '%s\n' "${domain}"
       return 0
     fi
@@ -103,4 +127,14 @@ find_available_domain() {
     fi
   done
   die "Unable to find an available .${tld} domain after ${max_attempts} attempts"
+}
+
+# Restore Porkbun checkDomain quote after find_available_domain ran in a subshell.
+load_porkbun_quote_if_any() {
+  local f="${PROXIES_STATE}/porkbun-last-quote.env"
+  [[ -f "${f}" ]] || return 0
+  # shellcheck disable=SC1090
+  source "${f}"
+  export PORKBUN_LAST_CHECKED_DOMAIN PORKBUN_LAST_PRICE_USD
+  rm -f "${f}" || true
 }

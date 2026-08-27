@@ -8,7 +8,7 @@
 #
 # build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
 
-PORKBUN_HELPER_BUILD="2026-08-27g"
+PORKBUN_HELPER_BUILD="2026-08-27i"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -257,13 +257,55 @@ porkbun_register_domain() {
   json="${PORKBUN_LAST_BODY}"
 
   log "Registered domain ${domain} via Porkbun: $(jq -c '{status,domain,message}' <<<"${json}" 2>/dev/null || printf '%s' "${json}")"
+}
 
-  # These domains are rotated/discarded — never leave auto-renew on (Porkbun may default it on).
-  if porkbun_request "/domain/updateAutoRenew/${domain}" '{"status":"off"}'; then
-    log "Disabled Porkbun auto-renew for ${domain}"
-  else
-    log "WARNING: could not disable auto-renew for ${domain}: ${PORKBUN_LAST_ERROR:-unknown} (turn it off in the Porkbun panel)"
-  fi
+# Disposable rotated domains must not auto-renew. Call after purchase, before SSL.
+porkbun_disable_auto_renew() {
+  local domain="$1"
+  local status_val ar attempt
+  local ok=0
+
+  log "Disabling Porkbun auto-renew for ${domain}"
+
+  # Docs example uses status=on; filters use yes/no — try both styles.
+  for status_val in off no; do
+    if porkbun_request "/domain/updateAutoRenew/${domain}" \
+      "$(jq -nc --arg s "${status_val}" '{status: $s}')"; then
+      ok=1
+      log "Porkbun updateAutoRenew/${domain} accepted status=${status_val}"
+      break
+    fi
+    log "Porkbun updateAutoRenew status=${status_val} failed: ${PORKBUN_LAST_ERROR:-unknown}"
+  done
+  [[ "${ok}" -eq 1 ]] || die "Could not disable auto-renew for ${domain}: ${PORKBUN_LAST_ERROR:-unknown}"
+
+  # Confirm (domain may not be queryable for a moment right after create).
+  for attempt in 1 2 3 4 5; do
+    if porkbun_request "/domain/get/${domain}" '{}'; then
+      ar="$(jq -r '
+        (.domain.autoRenew // .domain.autorenew // .autoRenew // .autorenew // empty)
+        | tostring | ascii_downcase
+      ' <<<"${PORKBUN_LAST_BODY}" 2>/dev/null || true)"
+      case "${ar}" in
+        no|off|false|0)
+          log "Confirmed auto-renew is off for ${domain} (autoRenew=${ar})"
+          return 0
+          ;;
+        yes|on|true|1)
+          die "Porkbun still reports auto-renew=${ar} for ${domain} after updateAutoRenew"
+          ;;
+        *)
+          log "Could not parse autoRenew from domain/get (got '${ar:-empty}'); attempt ${attempt}/5"
+          ;;
+      esac
+    else
+      log "domain/get/${domain} not ready yet (${PORKBUN_LAST_ERROR:-unknown}); attempt ${attempt}/5"
+    fi
+    sleep 2
+  done
+
+  # updateAutoRenew succeeded; treat missing verify as warning only if API accepted the write.
+  log "WARNING: could not verify auto-renew via domain/get for ${domain}; updateAutoRenew reported success"
 }
 
 porkbun_dns_add() {

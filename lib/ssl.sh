@@ -3,17 +3,28 @@
 
 DNS_PROPAGATION_SECONDS="${DNS_PROPAGATION_SECONDS:-180}"
 # Fresh registrations (esp. .xyz) often NXDOMAIN until registry NS delegates.
-DNS_DELEGATION_WAIT_SECONDS="${DNS_DELEGATION_WAIT_SECONDS:-900}"
-DNS_DELEGATION_POLL_SECONDS="${DNS_DELEGATION_POLL_SECONDS:-20}"
+DNS_DELEGATION_WAIT_SECONDS="${DNS_DELEGATION_WAIT_SECONDS:-5400}"
+DNS_DELEGATION_POLL_SECONDS="${DNS_DELEGATION_POLL_SECONDS:-60}"
+DNS_PUBLIC_RESOLVERS="${DNS_PUBLIC_RESOLVERS:-1.1.1.1 8.8.8.8 9.9.9.9}"
 
-# Resolve via public DNS (Google). Prints answers, one per line; empty if NXDOMAIN/timeout.
+# Resolve via several public resolvers (first non-empty wins). Avoids sitting
+# behind one resolver's NXDOMAIN negative cache after a fresh registration.
 public_dns_query() {
   local type="$1"
   local name="$2"
+  local resolver ans
+
   if command -v dig >/dev/null 2>&1; then
-    dig +short +time=3 +tries=2 "${type}" "${name}" @8.8.8.8 2>/dev/null || true
+    for resolver in ${DNS_PUBLIC_RESOLVERS}; do
+      ans="$(dig +short +time=2 +tries=1 "${type}" "${name}" @"${resolver}" 2>/dev/null || true)"
+      if [[ -n "${ans}" ]]; then
+        printf '%s\n' "${ans}"
+        return 0
+      fi
+    done
     return 0
   fi
+
   # DoH fallback when dig is missing
   local qtype
   case "$(printf '%s' "${type}" | tr '[:lower:]' '[:upper:]')" in
@@ -37,7 +48,7 @@ wait_for_public_dns() {
   local elapsed=0
   local ns_ans a_ans
 
-  log "Waiting up to ${max_wait}s for public DNS of ${domain} (fresh TLDs can NXDOMAIN for several minutes)"
+  log "Waiting up to $((max_wait / 60))m (poll every ${interval}s) for public DNS of ${domain}"
   while (( elapsed <= max_wait )); do
     ns_ans="$(public_dns_query NS "${domain}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     if [[ -n "${ns_ans}" ]]; then
@@ -47,18 +58,18 @@ wait_for_public_dns() {
           log "Public DNS ready: ${domain} NS=[${ns_ans}] A=${a_ans}"
           return 0
         fi
-        log "NS live ([${ns_ans}]) but A='${a_ans:-empty}' (want ${expect_ip}); waiting ${interval}s..."
+        log "NS live ([${ns_ans}]) but A='${a_ans:-empty}' (want ${expect_ip}); next check in ${interval}s..."
       else
         log "Public DNS ready: ${domain} NS=[${ns_ans}] A=${a_ans:-none}"
         return 0
       fi
     else
-      log "Public DNS still NXDOMAIN/empty for ${domain}; waiting ${interval}s... (${elapsed}s/${max_wait}s)"
+      log "Public DNS still NXDOMAIN for ${domain}; next check in ${interval}s (${elapsed}s/$((max_wait))s)"
     fi
     sleep "${interval}"
     elapsed=$((elapsed + interval))
   done
-  die "Public DNS for ${domain} not delegated after ${max_wait}s. Re-run later: force-rotate.sh --resume-domain ${domain}"
+  die "Public DNS for ${domain} not delegated after $((max_wait / 60))m. Re-run: force-rotate.sh --resume-domain ${domain}"
 }
 
 issue_wildcard_certificate() {
