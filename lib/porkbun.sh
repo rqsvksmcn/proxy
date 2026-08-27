@@ -8,7 +8,7 @@
 #
 # build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
 
-PORKBUN_HELPER_BUILD="2026-08-27f"
+PORKBUN_HELPER_BUILD="2026-08-27g"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -257,6 +257,13 @@ porkbun_register_domain() {
   json="${PORKBUN_LAST_BODY}"
 
   log "Registered domain ${domain} via Porkbun: $(jq -c '{status,domain,message}' <<<"${json}" 2>/dev/null || printf '%s' "${json}")"
+
+  # These domains are rotated/discarded — never leave auto-renew on (Porkbun may default it on).
+  if porkbun_request "/domain/updateAutoRenew/${domain}" '{"status":"off"}'; then
+    log "Disabled Porkbun auto-renew for ${domain}"
+  else
+    log "WARNING: could not disable auto-renew for ${domain}: ${PORKBUN_LAST_ERROR:-unknown} (turn it off in the Porkbun panel)"
+  fi
 }
 
 porkbun_dns_add() {
