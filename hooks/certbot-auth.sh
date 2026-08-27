@@ -12,6 +12,8 @@ PROXIES_ETC="${PROXIES_ETC:-/etc/proxies}"
 source "${PROXIES_ROOT}/lib/common.sh"
 # shellcheck disable=SC1091
 source "${PROXIES_ROOT}/lib/registrar.sh"
+# shellcheck disable=SC1091
+source "${PROXIES_ROOT}/lib/ssl.sh"
 
 load_credentials
 load_registrar
@@ -31,18 +33,27 @@ registrar_dns_add "${RECORD_NAME}" "TXT" "${CERTBOT_VALIDATION}"
 
 # Wait for propagation only after the last challenge record is in place.
 if [[ "${CERTBOT_REMAINING_CHALLENGES:-0}" == "0" ]]; then
-  local_wait="${DNS_PROPAGATION_SECONDS:-120}"
-  log "Auth hook: waiting ${local_wait}s for DNS TXT propagation"
-  sleep "${local_wait}"
+  local_wait="${DNS_PROPAGATION_SECONDS:-180}"
+  local_poll=15
+  local_elapsed=0
+  log "Auth hook: waiting up to ${local_wait}s for DNS TXT propagation of ${RECORD_NAME}"
 
-  # Best-effort visibility check (does not fail the hook if dig is missing).
-  if command -v dig >/dev/null 2>&1; then
-    if dig +short TXT "${RECORD_NAME}" @8.8.8.8 | grep -Fq "${CERTBOT_VALIDATION}"; then
-      log "Auth hook: TXT visible via 8.8.8.8"
-    else
-      log "Auth hook: TXT not yet visible via 8.8.8.8; Certbot will retry validation"
+  while (( local_elapsed < local_wait )); do
+    if public_dns_query TXT "${RECORD_NAME}" | tr -d '"' | grep -Fq "${CERTBOT_VALIDATION}"; then
+      log "Auth hook: TXT visible via public DNS after ${local_elapsed}s"
+      exit 0
     fi
-  fi
+    # Still NXDOMAIN for the whole zone? Keep waiting — LE will fail hard otherwise.
+    if [[ -z "$(public_dns_query NS "${CERTBOT_DOMAIN}")" ]]; then
+      log "Auth hook: apex still NXDOMAIN; waiting ${local_poll}s... (${local_elapsed}s/${local_wait}s)"
+    else
+      log "Auth hook: TXT not yet visible; waiting ${local_poll}s... (${local_elapsed}s/${local_wait}s)"
+    fi
+    sleep "${local_poll}"
+    local_elapsed=$((local_elapsed + local_poll))
+  done
+
+  die "Auth hook: TXT ${RECORD_NAME} not visible in public DNS after ${local_wait}s (refusing LE validation)"
 fi
 
 exit 0

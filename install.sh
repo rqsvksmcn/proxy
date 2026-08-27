@@ -397,7 +397,7 @@ copy_local_file() {
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y nginx certbot curl jq ca-certificates openssl apache2-utils
+  apt-get install -y nginx certbot curl jq ca-certificates openssl apache2-utils dnsutils
   systemctl enable --now nginx
 }
 

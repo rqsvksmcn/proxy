@@ -205,11 +205,17 @@ if [[ "${STATUS}" == "${DOMAIN_STATUS_PURCHASED}" ]]; then
   registrar_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}"
   mark_domain_dns_configured "${DOMAIN}"
   STATUS="${DOMAIN_STATUS_DNS}"
-  log "Waiting briefly for DNS zone to settle before ACME challenge"
-  sleep 30
 elif [[ "${STATUS}" == "${DOMAIN_STATUS_DNS}" || "${STATUS}" == "${DOMAIN_STATUS_SSL}" ]]; then
   log "Re-asserting DNS A records for ${DOMAIN} -> ${PUBLIC_IP}"
   registrar_point_domain_to_ip "${DOMAIN}" "${PUBLIC_IP}" || true
+fi
+
+# Fresh registrations often stay NXDOMAIN until the registry publishes NS.
+# Do not call certbot until public resolvers can see the zone (and ideally our A).
+if [[ "${STATUS}" == "${DOMAIN_STATUS_DNS}" || "${STATUS}" == "${DOMAIN_STATUS_SSL}" ]]; then
+  if [[ ! -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
+    wait_for_public_dns "${DOMAIN}" "${PUBLIC_IP}"
+  fi
 fi
 
 # --- SSL ---
