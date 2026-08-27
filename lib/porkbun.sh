@@ -8,7 +8,7 @@
 #
 # build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
 
-PORKBUN_HELPER_BUILD="2026-08-27c"
+PORKBUN_HELPER_BUILD="2026-08-27d"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -70,7 +70,9 @@ porkbun_require_keys() {
 # PORKBUN_LAST_BODY on success.
 porkbun_request() {
   local path="$1"
-  local extra_json="${2:-{}}"
+  # NOTE: do not write ${2:-{}} — bash ends the expansion at the first }, turning
+  # a passed '{}' into '{}}' and breaking fromjson.
+  local extra_json="${2:-}"
   local body response http_code
   local curl_opts=()
 
