@@ -20,6 +20,7 @@ load_registrar() {
       [[ -n "${PORKBUN_SECRET_API_KEY:-}" ]] || die "PORKBUN_SECRET_API_KEY is not set"
       # shellcheck disable=SC1091
       source "${PROXIES_ROOT}/lib/porkbun.sh"
+      log "Loaded porkbun helper build=${PORKBUN_HELPER_BUILD:-unknown} from ${PROXIES_ROOT}/lib/porkbun.sh"
       ;;
     cloudflare)
       [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN is not set"

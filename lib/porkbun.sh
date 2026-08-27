@@ -5,6 +5,10 @@
 # Errors: functions return non-zero and set PORKBUN_LAST_ERROR / PORKBUN_LAST_BODY.
 # Never capture porkbun_request with $(...) — that drops those globals. Call it bare,
 # then read PORKBUN_LAST_BODY.
+#
+# build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
+
+PORKBUN_HELPER_BUILD="2026-08-27c"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -160,7 +164,7 @@ porkbun_domain_available() {
   local json avail
 
   if ! porkbun_request "/domain/checkDomain/${domain}" '{}'; then
-    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR:-see ${PORKBUN_ERROR_FILE}}"
+    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR:-see /var/lib/proxies/porkbun-last-error.txt}"
   fi
   json="${PORKBUN_LAST_BODY}"
 
