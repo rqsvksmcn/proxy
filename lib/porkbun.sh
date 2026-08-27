@@ -8,7 +8,7 @@
 #
 # build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
 
-PORKBUN_HELPER_BUILD="2026-08-27e"
+PORKBUN_HELPER_BUILD="2026-08-27f"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -73,7 +73,7 @@ porkbun_request() {
   # NOTE: do not write ${2:-{}} — bash ends the expansion at the first }, turning
   # a passed '{}' into '{}}' and breaking fromjson.
   local extra_json="${2:-}"
-  local body response http_code
+  local request_body response resp_body http_code
   local curl_opts=()
 
   PORKBUN_LAST_ERROR=""
@@ -85,7 +85,7 @@ porkbun_request() {
   [[ -n "${extra_json}" ]] || extra_json='{}'
 
   # Build with --arg + fromjson (avoids --argjson CLI quirks on some jq builds).
-  if ! body="$(
+  if ! request_body="$(
     jq -nc \
       --arg key "${PORKBUN_API_KEY}" \
       --arg secret "${PORKBUN_SECRET_API_KEY}" \
@@ -111,29 +111,29 @@ porkbun_request() {
       curl "${curl_opts[@]}" -w '\n%{http_code}' \
         -X POST "${PORKBUN_API_BASE}${path}" \
         "${headers[@]}" \
-        --data "${body}"
+        --data "${request_body}"
     )" || {
       porkbun_fail "curl failed talking to ${PORKBUN_API_BASE}${path}"
       return 1
     }
 
     http_code="$(printf '%s\n' "${response}" | tail -n1)"
-    body="$(printf '%s\n' "${response}" | sed '$d')"
-    PORKBUN_LAST_BODY="${body}"
+    resp_body="$(printf '%s\n' "${response}" | sed '$d')"
+    PORKBUN_LAST_BODY="${resp_body}"
 
     if [[ ! "${http_code}" =~ ^[0-9]+$ ]]; then
-      porkbun_fail "Could not parse HTTP status from curl for ${path}; raw tail='${http_code}' body='${body}'"
+      porkbun_fail "Could not parse HTTP status from curl for ${path}; raw tail='${http_code}' body='${resp_body}'"
       return 1
     fi
 
     # checkDomain is limited to ~1 req / 10s — wait and retry.
     if [[ "${http_code}" == "429" ]]; then
       local wait_s
-      wait_s="$(jq -r '.ttlRemaining // 10' <<<"${body}" 2>/dev/null || printf '10')"
+      wait_s="$(jq -r '.ttlRemaining // 10' <<<"${resp_body}" 2>/dev/null || printf '10')"
       [[ "${wait_s}" =~ ^[0-9]+$ ]] || wait_s=10
       wait_s=$((wait_s + 1))
       if [[ "${attempt}" -ge "${max_attempts}" ]]; then
-        porkbun_fail "HTTP 429 for ${path} after ${attempt} attempts: ${body:-<empty body>}"
+        porkbun_fail "HTTP 429 for ${path} after ${attempt} attempts: ${resp_body:-<empty body>}"
         return 1
       fi
       log "Porkbun rate limit for ${path}; sleeping ${wait_s}s (attempt ${attempt}/${max_attempts})"
@@ -145,14 +145,14 @@ porkbun_request() {
   done
 
   if [[ "${http_code}" != "200" ]]; then
-    porkbun_fail "HTTP ${http_code} for ${path}: ${body:-<empty body>}"
+    porkbun_fail "HTTP ${http_code} for ${path}: ${resp_body:-<empty body>}"
     return 1
   fi
 
   local status
-  status="$(jq -r '.status // empty' <<<"${body}" 2>/dev/null || true)"
+  status="$(jq -r '.status // empty' <<<"${resp_body}" 2>/dev/null || true)"
   if [[ "$(printf '%s' "${status}" | tr '[:lower:]' '[:upper:]')" != "SUCCESS" ]]; then
-    porkbun_fail "API status='${status:-empty}' for ${path}: ${body:-<empty body>}"
+    porkbun_fail "API status='${status:-empty}' for ${path}: ${resp_body:-<empty body>}"
     return 1
   fi
 
