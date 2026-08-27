@@ -2,7 +2,7 @@
 
 Ubuntu **26.04** toolkit that registers a random 20-letter domain (default `.com`; configurable via `--tld`), points DNS (apex + wildcard) at the VM, issues a Let’s Encrypt wildcard certificate, and configures nginx reverse proxies for CDN and origin traffic.
 
-Supports registrars **InternetBS** (default) and **Porkbun** (`--registrar porkbun`).
+Supports registrars **InternetBS** (default), **Porkbun**, and **Cloudflare** (`--registrar cloudflare`).
 
 **Clients:** start with the step-by-step guide → [`docs/CLIENT_GUIDE.md`](docs/CLIENT_GUIDE.md)
 
@@ -51,6 +51,27 @@ curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo b
 sudo /opt/proxies/scripts/force-rotate.sh
 ```
 
+**Cloudflare Registrar (API beta) + `.com`:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash -s -- \
+  --registrar cloudflare \
+  --api-key 'YOUR_CLOUDFLARE_API_TOKEN' \
+  --account-id 'YOUR_CLOUDFLARE_ACCOUNT_ID' \
+  --tld com \
+  --client 'clientname42' \
+  --cdn-origin 'cdn.your-upstream.example' \
+  --backend-origin 'backend.your-upstream.example' \
+  --email 'you@your-real-domain.com' \
+  --api-user 'domainapi' \
+  --api-password 'STRONG_PASSWORD' \
+  --base-url 'https://github.com/OWNER/REPO'
+
+sudo /opt/proxies/scripts/force-rotate.sh
+```
+
+Cloudflare prerequisites: dashboard billing + default registrant contact + Domain Registration Agreement accepted; API token with **Registrar** and **Zone DNS Edit**. DNS records are created **DNS-only** (not proxied) so this VM can terminate Let’s Encrypt TLS. Only TLDs supported by the Registrar API beta can be purchased programmatically.
+
 `--base-url` accepts `https://github.com/OWNER/REPO`, `.../tree/<ref>`, or a `raw.githubusercontent.com` root. Use `--github-ref` for a non-default branch/tag.
 
 **Force a new domain on demand** (any time, billable):
@@ -98,9 +119,10 @@ Full instructions, day-to-day commands, troubleshooting, and file locations: **[
 ## Notes
 
 - **Billable:** live registration spends registrar balance (InternetBS or Porkbun).
-- Choose registrar with `--registrar internetbs|porkbun` and suffix with `--tld` / `--domain-suffix` (default `com`).
+- Choose registrar with `--registrar internetbs|porkbun|cloudflare` and suffix with `--tld` / `--domain-suffix` (default `com`).
 - Availability is checked before every purchase.
 - Wildcard certs use Certbot DNS-01 hooks against the configured registrar’s DNS API.
+- Cloudflare: A records are **unproxied**; Registrar API is beta (unsupported `--tld` fails at domain-check).
 - Local cleanup after `DOMAIN_RETENTION_DAYS` deletes nginx sites and runs `certbot delete` for that domain (not the registrar registration). Let's Encrypt may still email about expiry until the cert ages out; it is not auto-revoked.
 - `--email` is used for Let's Encrypt (and InternetBS registrant verification when using InternetBS).
 - Target OS is **Ubuntu 26.04** only (install and rotation scripts enforce this).

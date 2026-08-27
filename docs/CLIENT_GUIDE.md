@@ -7,7 +7,7 @@ This guide explains how to install and operate the proxy toolkit on an **Ubuntu 
 Once a day (or on demand), the toolkit checks whether a new domain is due. With the default interval it:
 
 1. Picks a **random 20-letter domain** under the configured suffix (`--tld`, default `.com`)
-2. Checks that it is **available** at the configured registrar (`--registrar`: `internetbs` or `porkbun`)
+2. Checks that it is **available** at the configured registrar (`--registrar`: `internetbs`, `porkbun`, or `cloudflare`)
 3. **Registers** the domain
 4. Points the domain and `*.domain` DNS **A** records to this VM’s public IP
 5. Issues a **wildcard SSL certificate** (Let’s Encrypt)
@@ -31,7 +31,7 @@ Before you start, make sure you have:
 |-------------|--------|
 | Ubuntu 26.04 server | Fresh VM is fine; install/rotation refuse other releases |
 | Root / sudo access | Install and rotation must run as root |
-| Registrar API credentials | InternetBS key+password **or** Porkbun API key+secret |
+| Registrar API credentials | InternetBS key+password, Porkbun key+secret, or Cloudflare API token + account id |
 | Funds on the registrar account | Each new domain is a paid registration |
 | One or more client ids | Hostname prefix id(s), e.g. `clientname42` (`--client`, repeatable) |
 | CDN origin host | Upstream for CDN vhost (`--cdn-origin`) |
@@ -41,7 +41,7 @@ Before you start, make sure you have:
 
 Optional: **`--tld`** / **`--domain-suffix`** (default `com`) — e.g. `xyz`, `net`.
 
-For **InternetBS**, a filled **registrant / WHOIS** contact file is required (name, phone, address). Email comes from `--email`. **Porkbun** uses account contacts / WHOIS privacy and does not need `registrant.env`.
+For **InternetBS**, a filled **registrant / WHOIS** contact file is required (name, phone, address). Email comes from `--email`. **Porkbun** and **Cloudflare** use account contacts / privacy settings and do not need `registrant.env`.
 
 ---
 
@@ -83,6 +83,23 @@ curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo b
   --base-url 'https://github.com/OWNER/REPO'
 ```
 
+Cloudflare example (Registrar API beta):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | sudo bash -s -- \
+  --registrar cloudflare \
+  --api-key 'YOUR_CLOUDFLARE_API_TOKEN' \
+  --account-id 'YOUR_CLOUDFLARE_ACCOUNT_ID' \
+  --tld com \
+  --client 'clientname42' \
+  --cdn-origin 'cdn.your-upstream.example' \
+  --backend-origin 'backend.your-upstream.example' \
+  --email 'you@your-real-domain.com' \
+  --api-user 'domainapi' \
+  --api-password 'CHOOSE_A_STRONG_PASSWORD' \
+  --base-url 'https://github.com/OWNER/REPO'
+```
+
 `--client` is **repeatable** . Each client gets `/etc/proxies/clients/<name>.env`.
 
 `--rotate-every-days` (default `1`) controls how often a **new** domain is purchased. Cron still runs every day at 03:00 to resume incomplete jobs and clean up expired local configs. On-demand `force-rotate.sh` always buys/resumes immediately and ignores the interval.
@@ -111,7 +128,7 @@ This will:
 
 ### Step 2 — Registrant contact (InternetBS only)
 
-Skip this step when using `--registrar porkbun` (account contacts / WHOIS privacy apply).
+Skip this step when using `--registrar porkbun` or `--registrar cloudflare` (account contacts / privacy settings apply).
 
 InternetBS **requires** contact fields on Domain/Create (name, phone, street, city, country, postal code). They cannot be omitted.
 
@@ -371,10 +388,11 @@ sudo nginx -t && sudo systemctl reload nginx
 
 | Option | Meaning |
 |--------|---------|
-| `--api-key` | Registrar API key (**required**) |
+| `--api-key` | Registrar API key / Cloudflare API token (**required**) |
 | `--password` | InternetBS password, or Porkbun secret alias (**required** for InternetBS) |
 | `--api-secret` | Porkbun secret API key (**required** for `--registrar porkbun`) |
-| `--registrar` | `internetbs` (default) or `porkbun` |
+| `--account-id` | Cloudflare account ID (**required** for `--registrar cloudflare`) |
+| `--registrar` | `internetbs` (default), `porkbun`, or `cloudflare` |
 | `--tld` / `--domain-suffix` | Domain suffix without leading dot (default: `com`), e.g. `xyz` |
 | `--client NAME` | Client id for hostname prefixes (**required**, repeatable) |
 | `--client-name NAME` | Legacy alias for a single `--client` |
@@ -406,7 +424,7 @@ sudo nginx -t && sudo systemctl reload nginx
 | `/opt/proxies/scripts/rotate-domain.sh` | Same pipeline (used by cron and force-rotate) |
 | `/opt/proxies/docs/CLIENT_GUIDE.md` | This guide (installed copy) |
 | `/etc/proxies/credentials.env` | `REGISTRAR`, `DOMAIN_TLD`, API keys, origins, email, intervals |
-| `/etc/proxies/registrant.env` | WHOIS contact for InternetBS (not used with Porkbun) |
+| `/etc/proxies/registrant.env` | WHOIS contact for InternetBS (not used with Porkbun/Cloudflare) |
 | `/etc/proxies/clients/<name>.env` | Per-client config (filename = client id; optional `CASINO_ID`) |
 | `/etc/proxies/prefixes-client.env` | Per-client hostname templates (`__CLIENT__-…`) |
 | `/etc/proxies/prefixes-shared.env` | Shared hostname prefixes |

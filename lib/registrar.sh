@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Registrar dispatch: InternetBS or Porkbun.
+# Registrar dispatch: InternetBS, Porkbun, or Cloudflare.
 # Source after lib/common.sh. Loads the active provider and exposes generic helpers.
 
 # Call after load_credentials (or once REGISTRAR / keys are in the environment).
@@ -21,8 +21,14 @@ load_registrar() {
       # shellcheck disable=SC1091
       source "${PROXIES_ROOT}/lib/porkbun.sh"
       ;;
+    cloudflare)
+      [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN is not set"
+      [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || die "CLOUDFLARE_ACCOUNT_ID is not set"
+      # shellcheck disable=SC1091
+      source "${PROXIES_ROOT}/lib/cloudflare.sh"
+      ;;
     *)
-      die "Unsupported REGISTRAR='${REGISTRAR}' (use internetbs or porkbun)"
+      die "Unsupported REGISTRAR='${REGISTRAR}' (use internetbs, porkbun, or cloudflare)"
       ;;
   esac
   log "Registrar=${REGISTRAR}; domain suffix=.${DOMAIN_TLD}"
@@ -36,6 +42,7 @@ registrar_domain_available() {
   case "${REGISTRAR}" in
     internetbs) internetbs_domain_available "$@" ;;
     porkbun) porkbun_domain_available "$@" ;;
+    cloudflare) cloudflare_domain_available "$@" ;;
   esac
 }
 
@@ -43,6 +50,7 @@ registrar_register_domain() {
   case "${REGISTRAR}" in
     internetbs) internetbs_register_domain "$@" ;;
     porkbun) porkbun_register_domain "$@" ;;
+    cloudflare) cloudflare_register_domain "$@" ;;
   esac
 }
 
@@ -50,6 +58,7 @@ registrar_dns_add() {
   case "${REGISTRAR}" in
     internetbs) internetbs_dns_add "$@" ;;
     porkbun) porkbun_dns_add "$@" ;;
+    cloudflare) cloudflare_dns_add "$@" ;;
   esac
 }
 
@@ -57,6 +66,7 @@ registrar_dns_remove() {
   case "${REGISTRAR}" in
     internetbs) internetbs_dns_remove "$@" ;;
     porkbun) porkbun_dns_remove "$@" ;;
+    cloudflare) cloudflare_dns_remove "$@" ;;
   esac
 }
 
@@ -67,6 +77,7 @@ registrar_point_domain_to_ip() {
   case "${REGISTRAR}" in
     internetbs) internetbs_point_domain_to_ip "${domain}" "${ip}" ;;
     porkbun) porkbun_point_domain_to_ip "${domain}" "${ip}" ;;
+    cloudflare) cloudflare_point_domain_to_ip "${domain}" "${ip}" ;;
   esac
 }
 

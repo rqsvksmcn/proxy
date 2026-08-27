@@ -135,8 +135,15 @@ load_credentials() {
       [[ -n "${PORKBUN_SECRET_API_KEY:-}" ]] || die "PORKBUN_SECRET_API_KEY is not set"
       export PORKBUN_API_KEY PORKBUN_SECRET_API_KEY
       ;;
+    cloudflare)
+      CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-${INTERNETBS_API_KEY:-}}"
+      CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
+      [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || die "CLOUDFLARE_API_TOKEN is not set"
+      [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || die "CLOUDFLARE_ACCOUNT_ID is not set (install with --account-id)"
+      export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+      ;;
     *)
-      die "Unsupported REGISTRAR='${REGISTRAR}' (use internetbs or porkbun)"
+      die "Unsupported REGISTRAR='${REGISTRAR}' (use internetbs, porkbun, or cloudflare)"
       ;;
   esac
 

@@ -23,6 +23,7 @@ DEFAULT_GITHUB_REF="${PROXIES_GITHUB_REF:-main}"
 API_KEY=""
 PASSWORD=""
 API_SECRET=""
+ACCOUNT_ID=""
 CLIENT_NAME=""
 CASINO_ID=""
 CLIENTS=()
@@ -53,6 +54,7 @@ PACKAGE_FILES=(
   "lib/common.sh"
   "lib/internetbs.sh"
   "lib/porkbun.sh"
+  "lib/cloudflare.sh"
   "lib/registrar.sh"
   "lib/ssl.sh"
   "lib/nginx.sh"
@@ -81,12 +83,16 @@ Registrar credentials:
   InternetBS (default):  --api-key KEY --password PASS
   Porkbun:               --registrar porkbun --api-key KEY --api-secret SECRET
                          (--password is accepted as an alias for --api-secret)
+  Cloudflare:            --registrar cloudflare --api-key TOKEN --account-id ID
+                         (API token needs Registrar + Zone DNS Edit; billing + default
+                         registrant contact must be set in the Cloudflare dashboard)
 
 Options:
-  --api-key KEY           Registrar API key (required)
+  --api-key KEY           Registrar API key / Cloudflare API token (required)
   --password PASS         InternetBS API password, or Porkbun secret (alias of --api-secret)
   --api-secret SECRET     Porkbun secret API key (required when --registrar porkbun)
-  --registrar NAME        internetbs (default) or porkbun
+  --account-id ID         Cloudflare account ID (required when --registrar cloudflare)
+  --registrar NAME        internetbs (default), porkbun, or cloudflare
   --tld SUFFIX            Domain suffix without leading dot (default: com). Examples: com, xyz, net
   --domain-suffix SUFFIX  Alias for --tld
   --client NAME           Client id for hostname prefixes (repeatable; ≥1 required).
@@ -187,6 +193,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api-secret)
       API_SECRET="${2:-}"
+      shift 2
+      ;;
+    --account-id)
+      ACCOUNT_ID="${2:-}"
       shift 2
       ;;
     --registrar)
@@ -298,14 +308,16 @@ fi
 [[ -n "${API_KEY}" ]] || die "--api-key is required"
 REGISTRAR="$(printf '%s' "${REGISTRAR}" | tr '[:upper:]' '[:lower:]')"
 case "${REGISTRAR}" in
-  internetbs|porkbun) ;;
-  *) die "--registrar must be internetbs or porkbun (got: ${REGISTRAR})" ;;
+  internetbs|porkbun|cloudflare) ;;
+  *) die "--registrar must be internetbs, porkbun, or cloudflare (got: ${REGISTRAR})" ;;
 esac
 # Porkbun: --api-secret preferred; --password accepted as alias.
 if [[ "${REGISTRAR}" == "porkbun" ]]; then
   API_SECRET="${API_SECRET:-${PASSWORD}}"
   [[ -n "${API_SECRET}" ]] || die "--api-secret is required for --registrar porkbun (or pass --password as the secret)"
-else
+elif [[ "${REGISTRAR}" == "cloudflare" ]]; then
+  [[ -n "${ACCOUNT_ID}" ]] || die "--account-id is required for --registrar cloudflare"
+elif [[ "${REGISTRAR}" == "internetbs" ]]; then
   [[ -n "${PASSWORD}" ]] || die "--password is required for --registrar internetbs"
 fi
 DOMAIN_TLD="$(printf '%s' "${DOMAIN_TLD}" | tr '[:upper:]' '[:lower:]' | sed 's/^\.\+//; s/\.\+$//')"
@@ -406,6 +418,11 @@ EOF
     cat >>"${PROXIES_ETC}/credentials.env" <<EOF
 PORKBUN_API_KEY="${API_KEY}"
 PORKBUN_SECRET_API_KEY="${API_SECRET}"
+EOF
+  elif [[ "${REGISTRAR}" == "cloudflare" ]]; then
+    cat >>"${PROXIES_ETC}/credentials.env" <<EOF
+CLOUDFLARE_API_TOKEN="${API_KEY}"
+CLOUDFLARE_ACCOUNT_ID="${ACCOUNT_ID}"
 EOF
   else
     cat >>"${PROXIES_ETC}/credentials.env" <<EOF
@@ -531,12 +548,12 @@ write_api_htpasswd() {
 install_registrant() {
   local dest="${PROXIES_ETC}/registrant.env"
 
-  # Porkbun uses account-level contacts; registrant.env is only required for InternetBS.
-  if [[ "${REGISTRAR}" == "porkbun" ]]; then
+  # Porkbun / Cloudflare use account-level contacts; registrant.env is only for InternetBS.
+  if [[ "${REGISTRAR}" == "porkbun" || "${REGISTRAR}" == "cloudflare" ]]; then
     if [[ -n "${REGISTRANT_SRC}" ]]; then
-      log "Ignoring --registrant-file (not used with --registrar porkbun)"
+      log "Ignoring --registrant-file (not used with --registrar ${REGISTRAR})"
     fi
-    log "Skipping registrant.env (Porkbun uses account contacts / WHOIS privacy)"
+    log "Skipping registrant.env (${REGISTRAR} uses account contacts / privacy settings)"
     return 0
   fi
 
@@ -687,6 +704,21 @@ Next steps:
   5. Read: ${PROXIES_ROOT}/docs/CLIENT_GUIDE.md
 
 Registrar: porkbun | Domain suffix: .${DOMAIN_TLD}
+Clients installed: ${CLIENTS[*]}
+Domains stay configured for ${DOMAIN_RETENTION_DAYS} days (DOMAIN_RETENTION_DAYS under ${PROXIES_ETC}/credentials.env).
+EOF
+    elif [[ "${REGISTRAR}" == "cloudflare" ]]; then
+      cat <<EOF
+
+Next steps:
+  1. In Cloudflare dashboard: billing payment method, default registrant contact, accept Domain Registration Agreement
+  2. API token needs Registrar + Zone DNS Edit (include all zones or account-wide)
+  3. Force first domain now: ${PROXIES_ROOT}/scripts/force-rotate.sh
+  4. Or re-run install with --run-now
+  5. Read: ${PROXIES_ROOT}/docs/CLIENT_GUIDE.md
+     Note: Cloudflare Registrar API is beta — if --tld is not API-supported, domain-check fails early.
+
+Registrar: cloudflare | Domain suffix: .${DOMAIN_TLD} | Account: ${ACCOUNT_ID}
 Clients installed: ${CLIENTS[*]}
 Domains stay configured for ${DOMAIN_RETENTION_DAYS} days (DOMAIN_RETENTION_DAYS under ${PROXIES_ETC}/credentials.env).
 EOF
