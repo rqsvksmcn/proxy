@@ -15,6 +15,16 @@ PORKBUN_CHECK_SLEEP_SECONDS="${PORKBUN_CHECK_SLEEP_SECONDS:-11}"
 
 PORKBUN_LAST_ERROR=""
 PORKBUN_LAST_BODY=""
+PORKBUN_ERROR_FILE="${PORKBUN_ERROR_FILE:-${PROXIES_STATE:-/var/lib/proxies}/porkbun-last-error.txt}"
+
+porkbun_fail() {
+  PORKBUN_LAST_ERROR="$*"
+  # Persist + log immediately so a subshell / empty expansion can never hide the cause.
+  mkdir -p "$(dirname "${PORKBUN_ERROR_FILE}")" 2>/dev/null || true
+  printf '%s\n' "${PORKBUN_LAST_ERROR}" >"${PORKBUN_ERROR_FILE}" 2>/dev/null || true
+  log "Porkbun error: ${PORKBUN_LAST_ERROR}"
+  return 1
+}
 
 porkbun_curl_args() {
   local args=(
@@ -31,15 +41,19 @@ porkbun_curl_args() {
 
 porkbun_require_keys() {
   if [[ -z "${PORKBUN_API_KEY:-}" || -z "${PORKBUN_SECRET_API_KEY:-}" ]]; then
-    PORKBUN_LAST_ERROR="PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY must both be set (pk1_… and sk1_…)"
+    porkbun_fail "PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY must both be set (pk1_… and sk1_…)"
     return 1
   fi
   # Trim accidental whitespace/CR from credentials.env edits.
   PORKBUN_API_KEY="$(printf '%s' "${PORKBUN_API_KEY}" | tr -d '\r\n[:space:]')"
   PORKBUN_SECRET_API_KEY="$(printf '%s' "${PORKBUN_SECRET_API_KEY}" | tr -d '\r\n[:space:]')"
   export PORKBUN_API_KEY PORKBUN_SECRET_API_KEY
-  if [[ "${PORKBUN_API_KEY}" == "${PORKBUN_SECRET_API_KEY}" ]]; then
-    PORKBUN_LAST_ERROR="API key and secret are identical — use pk1_… for --api-key and sk1_… for --api-secret"
+  if [[ "${PORKBUN_API_KEY}" != pk1_* ]]; then
+    porkbun_fail "PORKBUN_API_KEY should start with pk1_ (got prefix: ${PORKBUN_API_KEY:0:4}…)"
+    return 1
+  fi
+  if [[ "${PORKBUN_SECRET_API_KEY}" != sk1_* ]]; then
+    porkbun_fail "PORKBUN_SECRET_API_KEY should start with sk1_ (got prefix: ${PORKBUN_SECRET_API_KEY:0:4}…). You may have put the API key in both fields."
     return 1
   fi
 }
@@ -64,7 +78,7 @@ porkbun_request() {
   # Validate extra JSON early (empty → {}).
   [[ -n "${extra_json}" ]] || extra_json='{}'
   if ! jq -ne --argjson x "${extra_json}" '$x | type == "object"' >/dev/null 2>&1; then
-    PORKBUN_LAST_ERROR="Invalid JSON body for ${path}: ${extra_json}"
+    porkbun_fail "Invalid JSON body for ${path}: ${extra_json}"
     return 1
   fi
 
@@ -76,7 +90,7 @@ porkbun_request() {
       --argjson extra "${extra_json}" \
       '{apikey: $key, secretapikey: $secret} + $extra'
   )"; then
-    PORKBUN_LAST_ERROR="Failed to build Porkbun JSON body for ${path}"
+    porkbun_fail "Failed to build Porkbun JSON body for ${path}"
     return 1
   fi
 
@@ -95,7 +109,7 @@ porkbun_request() {
       "${headers[@]}" \
       --data "${body}"
   )" || {
-    PORKBUN_LAST_ERROR="curl failed talking to ${PORKBUN_API_BASE}${path}"
+    porkbun_fail "curl failed talking to ${PORKBUN_API_BASE}${path}"
     return 1
   }
 
@@ -103,15 +117,20 @@ porkbun_request() {
   body="$(printf '%s\n' "${response}" | sed '$d')"
   PORKBUN_LAST_BODY="${body}"
 
+  if [[ ! "${http_code}" =~ ^[0-9]+$ ]]; then
+    porkbun_fail "Could not parse HTTP status from curl for ${path}; raw tail='${http_code}' body='${body}'"
+    return 1
+  fi
+
   if [[ "${http_code}" != "200" ]]; then
-    PORKBUN_LAST_ERROR="HTTP ${http_code} for ${path}: ${body:-<empty body>}"
+    porkbun_fail "HTTP ${http_code} for ${path}: ${body:-<empty body>}"
     return 1
   fi
 
   local status
   status="$(jq -r '.status // empty' <<<"${body}" 2>/dev/null || true)"
   if [[ "$(printf '%s' "${status}" | tr '[:lower:]' '[:upper:]')" != "SUCCESS" ]]; then
-    PORKBUN_LAST_ERROR="API status='${status:-empty}' for ${path}: ${body:-<empty body>}"
+    porkbun_fail "API status='${status:-empty}' for ${path}: ${body:-<empty body>}"
     return 1
   fi
 
@@ -145,7 +164,7 @@ porkbun_domain_available() {
   local json avail
 
   if ! porkbun_request "/domain/checkDomain/${domain}" '{}'; then
-    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR:-unknown error}"
+    die "Porkbun checkDomain failed for ${domain}: ${PORKBUN_LAST_ERROR:-see ${PORKBUN_ERROR_FILE}}"
   fi
   json="${PORKBUN_LAST_BODY}"
 
