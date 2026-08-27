@@ -75,22 +75,18 @@ porkbun_request() {
 
   porkbun_require_keys || return 1
 
-  # Validate extra JSON early (empty → {}).
+  # Default / normalize extra object (checkDomain needs auth only).
   [[ -n "${extra_json}" ]] || extra_json='{}'
-  if ! jq -ne --argjson x "${extra_json}" '$x | type == "object"' >/dev/null 2>&1; then
-    porkbun_fail "Invalid JSON body for ${path}: ${extra_json}"
-    return 1
-  fi
 
-  # Single jq build — avoid nested --argjson "$(...)" which broke on some hosts.
+  # Build with --arg + fromjson (avoids --argjson CLI quirks on some jq builds).
   if ! body="$(
     jq -nc \
       --arg key "${PORKBUN_API_KEY}" \
       --arg secret "${PORKBUN_SECRET_API_KEY}" \
-      --argjson extra "${extra_json}" \
-      '{apikey: $key, secretapikey: $secret} + $extra'
+      --arg extra "${extra_json}" \
+      '{apikey: $key, secretapikey: $secret} + ($extra | fromjson)'
   )"; then
-    porkbun_fail "Failed to build Porkbun JSON body for ${path}"
+    porkbun_fail "Failed to build Porkbun JSON body for ${path} (extra=${extra_json})"
     return 1
   fi
 
