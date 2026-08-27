@@ -8,7 +8,7 @@
 #
 # build-id: 2026-08-27c (fromjson body merge; no Invalid-JSON precheck)
 
-PORKBUN_HELPER_BUILD="2026-08-27d"
+PORKBUN_HELPER_BUILD="2026-08-27e"
 
 PORKBUN_API_BASE="${PORKBUN_API_BASE:-https://api.porkbun.com/api/json/v3}"
 PORKBUN_CURL_INSECURE="${PORKBUN_CURL_INSECURE:-0}"
@@ -105,24 +105,44 @@ porkbun_request() {
   fi
 
   # Do not use curl -f — we need the error body for 400 diagnostics.
-  response="$(
-    curl "${curl_opts[@]}" -w '\n%{http_code}' \
-      -X POST "${PORKBUN_API_BASE}${path}" \
-      "${headers[@]}" \
-      --data "${body}"
-  )" || {
-    porkbun_fail "curl failed talking to ${PORKBUN_API_BASE}${path}"
-    return 1
-  }
+  local attempt=1 max_attempts=4
+  while true; do
+    response="$(
+      curl "${curl_opts[@]}" -w '\n%{http_code}' \
+        -X POST "${PORKBUN_API_BASE}${path}" \
+        "${headers[@]}" \
+        --data "${body}"
+    )" || {
+      porkbun_fail "curl failed talking to ${PORKBUN_API_BASE}${path}"
+      return 1
+    }
 
-  http_code="$(printf '%s\n' "${response}" | tail -n1)"
-  body="$(printf '%s\n' "${response}" | sed '$d')"
-  PORKBUN_LAST_BODY="${body}"
+    http_code="$(printf '%s\n' "${response}" | tail -n1)"
+    body="$(printf '%s\n' "${response}" | sed '$d')"
+    PORKBUN_LAST_BODY="${body}"
 
-  if [[ ! "${http_code}" =~ ^[0-9]+$ ]]; then
-    porkbun_fail "Could not parse HTTP status from curl for ${path}; raw tail='${http_code}' body='${body}'"
-    return 1
-  fi
+    if [[ ! "${http_code}" =~ ^[0-9]+$ ]]; then
+      porkbun_fail "Could not parse HTTP status from curl for ${path}; raw tail='${http_code}' body='${body}'"
+      return 1
+    fi
+
+    # checkDomain is limited to ~1 req / 10s — wait and retry.
+    if [[ "${http_code}" == "429" ]]; then
+      local wait_s
+      wait_s="$(jq -r '.ttlRemaining // 10' <<<"${body}" 2>/dev/null || printf '10')"
+      [[ "${wait_s}" =~ ^[0-9]+$ ]] || wait_s=10
+      wait_s=$((wait_s + 1))
+      if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+        porkbun_fail "HTTP 429 for ${path} after ${attempt} attempts: ${body:-<empty body>}"
+        return 1
+      fi
+      log "Porkbun rate limit for ${path}; sleeping ${wait_s}s (attempt ${attempt}/${max_attempts})"
+      sleep "${wait_s}"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    break
+  done
 
   if [[ "${http_code}" != "200" ]]; then
     porkbun_fail "HTTP ${http_code} for ${path}: ${body:-<empty body>}"
@@ -173,22 +193,21 @@ porkbun_domain_available() {
   avail="$(jq -r '.response.avail // .avail // empty' <<<"${json}")"
   case "$(printf '%s' "${avail}" | tr '[:upper:]' '[:lower:]')" in
     yes|available|true|1)
+      # price may be a USD string/number, or an object with .registration
       PORKBUN_LAST_PRICE_USD="$(jq -r '
-        .response.price.registration
-        // .response.price
-        // .price.registration
-        // .price
-        // empty
+        (.response.price // .price // empty) as $p
+        | if ($p|type) == "object" then
+            ($p.registration // $p.renew // empty)
+          elif ($p|type) == "string" or ($p|type) == "number" then
+            $p
+          else
+            empty
+          end
       ' <<<"${json}")"
-      if [[ -z "${PORKBUN_LAST_PRICE_USD}" || "${PORKBUN_LAST_PRICE_USD}" == "null" ]]; then
-        PORKBUN_LAST_PRICE_USD="$(jq -r '
-          .response.price.registration // empty
-        ' <<<"${json}")"
-      fi
-      if [[ "${PORKBUN_LAST_PRICE_USD}" == \{* ]]; then
-        PORKBUN_LAST_PRICE_USD="$(jq -r '.registration // .renew // empty' <<<"${PORKBUN_LAST_PRICE_USD}")"
-      fi
-      export PORKBUN_LAST_PRICE_USD
+      [[ -n "${PORKBUN_LAST_PRICE_USD}" && "${PORKBUN_LAST_PRICE_USD}" != "null" ]] \
+        || die "Porkbun checkDomain returned available but no price for ${domain}: ${json}"
+      PORKBUN_LAST_CHECKED_DOMAIN="${domain}"
+      export PORKBUN_LAST_PRICE_USD PORKBUN_LAST_CHECKED_DOMAIN
       return 0
       ;;
     *)
@@ -211,13 +230,19 @@ porkbun_register_domain() {
   local domain="$1"
   local json cost_cents idem extra
 
-  log "Verifying ${domain} is still available before Porkbun purchase"
-  if ! porkbun_domain_available "${domain}"; then
-    die "Refusing to purchase ${domain}: Porkbun checkDomain did not report available"
+  # Reuse the quote from find_available_domain when possible — a second
+  # checkDomain within 10s hits RATE_LIMIT_EXCEEDED (1 check / 10s).
+  if [[ "${PORKBUN_LAST_CHECKED_DOMAIN:-}" == "${domain}" && -n "${PORKBUN_LAST_PRICE_USD:-}" ]]; then
+    log "Reusing Porkbun checkDomain quote for ${domain} (price=${PORKBUN_LAST_PRICE_USD} USD)"
+  else
+    log "Verifying ${domain} is still available before Porkbun purchase"
+    if ! porkbun_domain_available "${domain}"; then
+      die "Refusing to purchase ${domain}: Porkbun checkDomain did not report available"
+    fi
   fi
 
   cost_cents="$(porkbun_usd_to_cents "${PORKBUN_LAST_PRICE_USD}")"
-  log "Availability confirmed for ${domain}; price=${PORKBUN_LAST_PRICE_USD} USD (${cost_cents} cents)"
+  log "Purchasing ${domain} via Porkbun; price=${PORKBUN_LAST_PRICE_USD} USD (${cost_cents} cents)"
 
   idem="proxies-register-${domain}-$(date -u +%Y%m%d)"
   PORKBUN_IDEMPOTENCY_KEY="${idem}"
